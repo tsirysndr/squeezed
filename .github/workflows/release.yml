@@ -53,7 +53,10 @@ jobs:
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
         with:
-          key: ${{ matrix.target }}
+          # Key on the unique per-job label, not the OS: darwin-amd64 and
+          # darwin-arm64 both run on the same macos-latest (ARM) runner, so a
+          # shared key would let one clobber/restore the other's cache.
+          key: ${{ matrix.label }}
 
       - name: Build
         run: cargo build --release --locked --target ${{ matrix.target }} --bin squeezed
