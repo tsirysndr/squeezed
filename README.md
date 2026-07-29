@@ -1,5 +1,7 @@
 # squeezed
 
+[![Nix](https://github.com/tsirysndr/squeezed/actions/workflows/nix.yml/badge.svg)](https://github.com/tsirysndr/squeezed/actions/workflows/nix.yml)
+
 **Serve a raw PCM audio stream to any [Squeezelite](https://github.com/ralph-irving/squeezelite) / Squeezebox client over the SlimProto protocol.**
 
 `squeezed` takes a raw **PCM S16LE** audio stream from **stdin**, a **FIFO**, a **unix socket**, or a **TCP socket**, and turns it into a Squeezebox server. Point any Squeezelite instance at it — or let them auto-discover it — and the audio comes out the other end, in sync across as many players as you like.
