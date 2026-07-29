@@ -16,6 +16,36 @@
 
 ---
 
+## Table of Contents
+
+- [Features](#features)
+- [Install](#install)
+  - [Debian / Ubuntu (`apt`)](#debian--ubuntu-apt)
+  - [Fedora / RHEL (`dnf`)](#fedora--rhel-dnf)
+  - [Nix](#nix)
+  - [Homebrew](#homebrew)
+  - [Download from GitHub Releases](#download-from-github-releases)
+- [Build from source](#build-from-source)
+- [Quick start](#quick-start)
+- [Input sources](#input-sources)
+  - [stdin (default)](#stdin-default)
+  - [FIFO (named pipe)](#fifo-named-pipe)
+  - [Unix domain socket](#unix-domain-socket)
+  - [TCP socket](#tcp-socket)
+- [Configuration](#configuration)
+  - [TOML file](#toml-file)
+  - [CLI reference](#cli-reference)
+- [Audio format](#audio-format)
+- [Discovery](#discovery)
+- [Multiroom sync](#multiroom-sync)
+  - [How the sync works](#how-the-sync-works)
+- [More recipes](#more-recipes)
+- [Troubleshooting](#troubleshooting)
+- [How it works](#how-it-works)
+- [License](#license)
+
+---
+
 ## Features
 
 - **Any PCM source** — read from `stdin`, a named pipe, a unix socket, or a TCP listener.
@@ -29,7 +59,68 @@
 
 ## Install
 
-Build from source (needs a recent [Rust toolchain](https://rustup.rs)):
+Prebuilt binaries are published for **Linux** and **macOS** (`x86_64` and `arm64`) plus **FreeBSD/NetBSD** (`amd64`) on every tagged release.
+
+You'll also want a PCM producer ([`ffmpeg`](https://ffmpeg.org)) and a player ([`squeezelite`](https://github.com/ralph-irving/squeezelite)) — both are in most package managers (`brew install ffmpeg squeezelite`, `apt install ffmpeg squeezelite`, …).
+
+### Debian / Ubuntu (`apt`)
+
+Packages are hosted on [Gemfury](https://gemfury.com):
+
+```sh
+echo "deb [trusted=yes] https://apt.fury.io/tsiry/ /" \
+  | sudo tee /etc/apt/sources.list.d/squeezed.list
+sudo apt-get update
+sudo apt-get install squeezed
+```
+
+### Fedora / RHEL (`dnf`)
+
+```sh
+sudo tee /etc/yum.repos.d/squeezed.repo >/dev/null <<'EOF'
+[fury]
+name=Gemfury Private Repo
+baseurl=https://yum.fury.io/tsiry/
+enabled=1
+gpgcheck=0
+EOF
+sudo dnf install squeezed
+```
+
+### Nix
+
+```sh
+# From the flake (installs into your profile)
+nix profile install github:tsirysndr/squeezed
+
+# Or run without installing
+nix run github:tsirysndr/squeezed -- --help
+```
+
+### Homebrew
+
+```sh
+brew install tsirysndr/tap/squeezed
+```
+
+### Download from GitHub Releases
+
+Grab a tarball for your platform from the
+[releases page](https://github.com/tsirysndr/squeezed/releases):
+
+```sh
+# Example: Linux x86_64 — pick the asset matching your OS/arch
+curl -fsSL -o squeezed.tar.gz \
+  https://github.com/tsirysndr/squeezed/releases/latest/download/squeezed-<version>-linux-amd64.tar.gz
+tar -xzf squeezed.tar.gz
+sudo install -m 0755 squeezed /usr/local/bin/squeezed
+```
+
+---
+
+## Build from source
+
+Needs a recent [Rust toolchain](https://rustup.rs):
 
 ```bash
 git clone https://github.com/tsirysndr/squeezed
@@ -44,11 +135,11 @@ Optionally drop it on your `PATH`:
 install -m755 target/release/squeezed /usr/local/bin/squeezed
 ```
 
-You'll also want a PCM producer ([`ffmpeg`](https://ffmpeg.org)) and a player ([`squeezelite`](https://github.com/ralph-irving/squeezelite)) — both are in most package managers (`brew install ffmpeg squeezelite`, `apt install ffmpeg squeezelite`, …).
-
 ---
 
-## Quick start — pipe from ffmpeg, play with squeezelite
+## Quick start
+
+Pipe from ffmpeg, play with squeezelite.
 
 **Terminal 1 — start the server and feed it audio from ffmpeg:**
 
