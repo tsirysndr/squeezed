@@ -155,26 +155,11 @@ jobs:
             dist/*.rpm*
           if-no-files-found: error
 
-  build-bsd:
-    name: ${{ matrix.label }}
+  # FreeBSD builds quickly and reliably (`pkg install` from a fast CDN), so it
+  # stays on the release's critical path.
+  build-freebsd:
+    name: freebsd-amd64
     runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          # squeezed is pure Rust with no C dependencies — the base system's
-          # Rust toolchain is all that's needed.
-          - label: freebsd-amd64
-            os: freebsd
-            os_version: "14.3"
-            arch: x86-64
-            install_deps: sudo env ASSUME_ALWAYS_YES=YES pkg install -y rust
-          - label: netbsd-amd64
-            os: netbsd
-            os_version: "10.1"
-            arch: x86-64
-            install_deps: sudo pkgin -y update && sudo pkgin -y install rust
-
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -183,12 +168,12 @@ jobs:
           # the workflow was dispatched from.
           ref: ${{ inputs.tag || github.ref }}
 
-      - name: Start ${{ matrix.os }} ${{ matrix.arch }} VM
+      - name: Start freebsd x86-64 VM
         uses: cross-platform-actions/action@v1.3.0
         with:
-          operating_system: ${{ matrix.os }}
-          version: ${{ matrix.os_version }}
-          architecture: ${{ matrix.arch }}
+          operating_system: freebsd
+          version: "14.3"
+          architecture: x86-64
           shell: bash
           memory: 8G
           cpu_count: 4
@@ -197,7 +182,7 @@ jobs:
         shell: cpa.sh {0}
         run: |
           set -euo pipefail
-          ${{ matrix.install_deps }}
+          sudo env ASSUME_ALWAYS_YES=YES pkg install -y rust
           # Keep target/ outside the workspace so it isn't synced back
           export CARGO_TARGET_DIR="$HOME/build"
           cargo build --release --locked --bin squeezed
@@ -213,7 +198,7 @@ jobs:
           else
             version="${GITHUB_REF_NAME}"
           fi
-          name="squeezed-${version}-${{ matrix.label }}"
+          name="squeezed-${version}-freebsd-amd64"
           mkdir -p dist/staging
           install -m 0755 dist/squeezed dist/staging/squeezed
           cp README.md LICENSE squeezed.example.toml dist/staging/
@@ -224,13 +209,81 @@ jobs:
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.label }}
+          name: freebsd-amd64
+          path: dist/*.tar.gz*
+          if-no-files-found: error
+
+  # NetBSD is slow to provision (large Rust/LLVM toolchain over pkgsrc), so it
+  # is fully decoupled: it never gates the release (see the `release` job's
+  # `needs`), it is time-boxed so it can't hang the run, and its asset is
+  # attached to the already-published release by `release-netbsd`.
+  build-netbsd:
+    name: netbsd-amd64
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    # A NetBSD failure/timeout must not turn the whole release run red — the
+    # release is already published independently.
+    continue-on-error: true
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+
+      - name: Start netbsd x86-64 VM
+        uses: cross-platform-actions/action@v1.3.0
+        with:
+          operating_system: netbsd
+          version: "10.1"
+          architecture: x86-64
+          shell: bash
+          memory: 8G
+          cpu_count: 4
+
+      - name: Build in VM
+        shell: cpa.sh {0}
+        run: |
+          set -euo pipefail
+          # Install Rust with pkg_add straight from the CDN mirror. This avoids
+          # pkgin's slow `ftp.NetBSD.org` summary fetch + local DB rebuild that
+          # would otherwise stall for a very long time.
+          export PKG_PATH="https://cdn.NetBSD.org/pub/pkgsrc/packages/NetBSD/amd64/10.1/All/"
+          sudo -E pkg_add -v rust
+          # Keep target/ outside the workspace so it isn't synced back
+          export CARGO_TARGET_DIR="$HOME/build"
+          cargo build --release --locked --bin squeezed
+          mkdir -p dist
+          cp "$CARGO_TARGET_DIR/release/squeezed" dist/squeezed
+
+      - name: Package tarball
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            version="${{ inputs.tag }}"
+          else
+            version="${GITHUB_REF_NAME}"
+          fi
+          name="squeezed-${version}-netbsd-amd64"
+          mkdir -p dist/staging
+          install -m 0755 dist/squeezed dist/staging/squeezed
+          cp README.md LICENSE squeezed.example.toml dist/staging/
+          tar -C dist/staging -czf "dist/${name}.tar.gz" .
+          (cd dist && shasum -a 256 "${name}.tar.gz" > "${name}.tar.gz.sha256")
+          ls -lh dist
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: netbsd-amd64
           path: dist/*.tar.gz*
           if-no-files-found: error
 
   release:
     name: Publish GitHub release
-    needs: [build, build-bsd]
+    # Deliberately does NOT depend on build-netbsd — the slow NetBSD build must
+    # never block publishing. Its asset is added afterward by release-netbsd.
+    needs: [build, build-freebsd]
     runs-on: ubuntu-latest
     steps:
       - name: Download all artifacts
@@ -279,3 +332,34 @@ jobs:
               "https://${FURY_TOKEN}@push.fury.io/${FURY_ACCOUNT}/"
             echo
           done
+
+  # Attach the NetBSD tarball to the already-published release once it's ready.
+  # Depends on `release` (so the release exists) but `release` never waits on
+  # NetBSD — if build-netbsd is slow, fails, or times out, this job simply skips
+  # and the rest of the release is unaffected.
+  release-netbsd:
+    name: Attach NetBSD asset
+    needs: [build-netbsd, release]
+    # Only when NetBSD actually built and the release exists; otherwise skip
+    # cleanly (never fail the run over the optional NetBSD asset).
+    if: ${{ always() && needs.release.result == 'success' && needs.build-netbsd.result == 'success' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download NetBSD artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: netbsd-amd64
+          path: dist
+
+      - name: Show artifacts
+        run: ls -lh dist
+
+      - name: Upload to release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.event.inputs.tag || github.ref_name }}
+          files: dist/*.tar.gz*
+          # The release already exists with its notes — just add this asset.
+          generate_release_notes: false
+          draft: false
+          prerelease: false
