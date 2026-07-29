@@ -1,0 +1,13 @@
+Package: squeezed
+Version: 0.1.0
+Section: sound
+Priority: optional
+Architecture: arm64
+Maintainer: Tsiry Sandratraina <tsiry.sndr@rocksky.app>
+Homepage: https://github.com/tsirysndr/squeezed
+Depends: libc6
+Description: Serve a raw PCM audio stream to Squeezelite/Squeezebox clients over SlimProto
+ squeezed reads a raw PCM (S16LE by default) audio stream from stdin, a FIFO, a
+ unix socket, or a TCP socket and serves it over the SlimProto protocol so any
+ Squeezelite client can play it. It answers UDP service discovery for zero-config
+ playback and keeps multiple players sample-aligned for true multiroom sync.

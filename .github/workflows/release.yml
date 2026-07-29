@@ -1,0 +1,278 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag to release (e.g. v0.1.0)"
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: ${{ matrix.label }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - label: darwin-amd64
+            os: macos-latest
+            target: x86_64-apple-darwin
+          - label: darwin-arm64
+            os: macos-latest
+            target: aarch64-apple-darwin
+          - label: linux-amd64
+            os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+          # Native ARM Linux runner — no `cross`, no QEMU. Faster and
+          # matches production glibc more closely.
+          - label: linux-arm64
+            os: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          # On manual dispatch, build the tag's code rather than the branch
+          # the workflow was dispatched from.
+          ref: ${{ inputs.tag || github.ref }}
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+
+      - name: Build
+        run: cargo build --release --locked --target ${{ matrix.target }} --bin squeezed
+
+      - name: Package tarball
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            version="${{ inputs.tag }}"
+          else
+            version="${GITHUB_REF_NAME}"
+          fi
+          name="squeezed-${version}-${{ matrix.label }}"
+          src="target/${{ matrix.target }}/release/squeezed"
+          mkdir -p dist/staging
+          cp "$src" dist/staging/squeezed
+          cp README.md LICENSE squeezed.example.toml dist/staging/
+          tar -C dist/staging -czf "dist/${name}.tar.gz" .
+          (cd dist && shasum -a 256 "${name}.tar.gz" > "${name}.tar.gz.sha256")
+          ls -lh dist
+
+      - name: Install dpkg-deb and rpmbuild
+        if: startsWith(matrix.os, 'ubuntu')
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y dpkg-dev rpm
+
+      - name: Build .deb
+        if: startsWith(matrix.os, 'ubuntu')
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            version="${{ inputs.tag }}"
+          else
+            version="${GITHUB_REF_NAME}"
+          fi
+          version_no_v="${version#v}"
+          case "${{ matrix.label }}" in
+            linux-amd64) deb_arch=amd64 ;;
+            linux-arm64) deb_arch=arm64 ;;
+          esac
+          pkg_root="dist/debian/${deb_arch}"
+          mkdir -p "$pkg_root/usr/local/bin"
+          install -m 0755 "target/${{ matrix.target }}/release/squeezed" "$pkg_root/usr/local/bin/squeezed"
+          sed -i "s/^Version: .*/Version: ${version_no_v}/" "$pkg_root/DEBIAN/control"
+          dpkg-deb --build --root-owner-group "$pkg_root" "dist/squeezed_${version_no_v}_${deb_arch}.deb"
+
+      - name: Build .rpm
+        if: matrix.label == 'linux-amd64'
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            version="${{ inputs.tag }}"
+          else
+            version="${GITHUB_REF_NAME}"
+          fi
+          version_no_v="${version#v}"
+          rpm_arch=amd64
+          rpm_target=x86_64
+          src_root="dist/rpm/${rpm_arch}"
+          mkdir -p "${src_root}/usr/local/bin"
+          install -m 0755 "target/${{ matrix.target }}/release/squeezed" "${src_root}/usr/local/bin/squeezed"
+          sed -i "s/^Version:        .*/Version:        ${version_no_v}/" "${src_root}/squeezed.spec"
+
+          rpm_top="$(pwd)/dist/rpmbuild"
+          mkdir -p "${rpm_top}"/{BUILD,BUILDROOT,RPMS,SOURCES,SPECS,SRPMS}
+          cp -r "${src_root}" "${rpm_top}/SOURCES/${rpm_arch}"
+          rpmbuild --define "_topdir ${rpm_top}" \
+                   --define "_sourcedir ${rpm_top}/SOURCES" \
+                   --target "${rpm_target}" \
+                   -bb "${src_root}/squeezed.spec"
+          find "${rpm_top}/RPMS" -name '*.rpm' -exec mv {} dist/ \;
+
+      - name: Checksum packages
+        if: startsWith(matrix.os, 'ubuntu')
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd dist
+          for f in *.deb *.rpm; do
+            [ -e "$f" ] || continue
+            shasum -a 256 "$f" > "$f.sha256"
+          done
+          ls -lh
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.label }}
+          path: |
+            dist/*.tar.gz*
+            dist/*.deb*
+            dist/*.rpm*
+          if-no-files-found: error
+
+  build-bsd:
+    name: ${{ matrix.label }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # squeezed is pure Rust with no C dependencies — the base system's
+          # Rust toolchain is all that's needed.
+          - label: freebsd-amd64
+            os: freebsd
+            os_version: "14.3"
+            arch: x86-64
+            install_deps: sudo env ASSUME_ALWAYS_YES=YES pkg install -y rust
+          - label: netbsd-amd64
+            os: netbsd
+            os_version: "10.1"
+            arch: x86-64
+            install_deps: sudo pkgin -y update && sudo pkgin -y install rust
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          # On manual dispatch, build the tag's code rather than the branch
+          # the workflow was dispatched from.
+          ref: ${{ inputs.tag || github.ref }}
+
+      - name: Start ${{ matrix.os }} ${{ matrix.arch }} VM
+        uses: cross-platform-actions/action@v1.3.0
+        with:
+          operating_system: ${{ matrix.os }}
+          version: ${{ matrix.os_version }}
+          architecture: ${{ matrix.arch }}
+          shell: bash
+          memory: 8G
+          cpu_count: 4
+
+      - name: Build in VM
+        shell: cpa.sh {0}
+        run: |
+          set -euo pipefail
+          ${{ matrix.install_deps }}
+          # Keep target/ outside the workspace so it isn't synced back
+          export CARGO_TARGET_DIR="$HOME/build"
+          cargo build --release --locked --bin squeezed
+          mkdir -p dist
+          cp "$CARGO_TARGET_DIR/release/squeezed" dist/squeezed
+
+      - name: Package tarball
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            version="${{ inputs.tag }}"
+          else
+            version="${GITHUB_REF_NAME}"
+          fi
+          name="squeezed-${version}-${{ matrix.label }}"
+          mkdir -p dist/staging
+          install -m 0755 dist/squeezed dist/staging/squeezed
+          cp README.md LICENSE squeezed.example.toml dist/staging/
+          tar -C dist/staging -czf "dist/${name}.tar.gz" .
+          (cd dist && shasum -a 256 "${name}.tar.gz" > "${name}.tar.gz.sha256")
+          ls -lh dist
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.label }}
+          path: dist/*.tar.gz*
+          if-no-files-found: error
+
+  release:
+    name: Publish GitHub release
+    needs: [build, build-bsd]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Show artifacts
+        run: ls -lh dist
+
+      - name: Create release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.event.inputs.tag || github.ref_name }}
+          files: dist/*
+          generate_release_notes: true
+          draft: false
+          prerelease: false
+
+      - name: Check Gemfury secrets
+        id: gemfury
+        env:
+          FURY_TOKEN: ${{ secrets.FURY_TOKEN }}
+          FURY_ACCOUNT: ${{ secrets.FURY_ACCOUNT }}
+        run: |
+          if [ -n "$FURY_TOKEN" ] && [ -n "$FURY_ACCOUNT" ]; then
+            echo "available=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "available=false" >> "$GITHUB_OUTPUT"
+            echo "Gemfury secrets not set; skipping push"
+          fi
+
+      - name: Push .deb and .rpm to Gemfury
+        if: steps.gemfury.outputs.available == 'true'
+        env:
+          FURY_TOKEN: ${{ secrets.FURY_TOKEN }}
+          FURY_ACCOUNT: ${{ secrets.FURY_ACCOUNT }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          for pkg in dist/*.deb dist/*.rpm; do
+            echo "Pushing $pkg to Gemfury (${FURY_ACCOUNT})"
+            curl -fsS -F package=@"${pkg}" \
+              "https://${FURY_TOKEN}@push.fury.io/${FURY_ACCOUNT}/"
+            echo
+          done
