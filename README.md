@@ -1,6 +1,7 @@
 # squeezed
 
 [![Nix](https://github.com/tsirysndr/squeezed/actions/workflows/nix.yml/badge.svg)](https://github.com/tsirysndr/squeezed/actions/workflows/nix.yml)
+[![FlakeHub](https://img.shields.io/endpoint?url=https://flakehub.com/f/tsirysndr/squeezed/badge)](https://flakehub.com/flake/tsirysndr/squeezed)
 
 **Serve a raw PCM audio stream to any [Squeezelite](https://github.com/ralph-irving/squeezelite) / Squeezebox client over the SlimProto protocol.**
 
