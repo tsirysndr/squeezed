@@ -1,0 +1,33 @@
+# squeezed configuration.
+#
+# Every key is optional and mirrors a CLI flag. Precedence is:
+#   built-in defaults  <  this file  <  command-line flags
+#
+# Run with:  squeezed --config squeezed.example.toml
+
+[input]
+# Where the raw PCM comes from: "stdin" | "fifo" | "unix" | "tcp"
+source = "stdin"
+
+# Path for the "fifo" or "unix" source (ignored otherwise).
+# path = "/tmp/squeezed.fifo"
+
+# Bind address for the "tcp" source (ignored otherwise).
+# bind = "0.0.0.0:4711"
+
+[audio]
+# The stream must be raw, signed, little-endian PCM in this format.
+sample_rate = 44100   # 8000, 11025, 16000, 22050, 24000, 32000, 44100, 48000, 88200, 96000, ...
+channels    = 2       # 1 (mono) or 2 (stereo)
+bits        = 16      # 8, 16, 24 or 32
+
+[server]
+bind_ip   = "0.0.0.0" # interface the servers listen on
+slim_port = 3483      # SlimProto control + UDP discovery port (3483 is the default clients expect)
+http_port = 9000      # HTTP port squeezelite pulls PCM from
+discovery = true      # answer UDP discovery so clients auto-find this server
+name      = "squeezed" # device/server name advertised to clients
+
+# Rolling PCM retention buffer, in bytes. A late-joining or briefly-stalled
+# client is served from here. 4 MiB ≈ 23 s of 44.1 kHz S16LE stereo.
+# buffer_bytes = 4194304
