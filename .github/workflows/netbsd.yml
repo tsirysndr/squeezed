@@ -1,0 +1,83 @@
+name: NetBSD build
+
+# Standalone, manually-triggered NetBSD build. The main release workflow runs
+# NetBSD automatically but decoupled (it never blocks publishing); use this to
+# build and attach the NetBSD asset on demand — e.g. to retry after a failed or
+# slow run, or to add it to a release that already published without it.
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to build and attach the NetBSD asset to (e.g. v0.1.0)"
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  netbsd:
+    name: netbsd-amd64
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag }}
+
+      - name: Start netbsd x86-64 VM
+        uses: cross-platform-actions/action@v1.3.0
+        with:
+          operating_system: netbsd
+          version: "10.1"
+          architecture: x86-64
+          shell: bash
+          memory: 8G
+          cpu_count: 4
+
+      - name: Build in VM
+        shell: cpa.sh {0}
+        run: |
+          set -euo pipefail
+          # Point pkgin at the fast HTTPS CDN instead of the default (painfully
+          # slow) ftp.NetBSD.org mirror, then let pkgin install Rust — it
+          # resolves the dependency graph and upgrades already-installed deps.
+          sudo sh -c 'echo "https://cdn.NetBSD.org/pub/pkgsrc/packages/NetBSD/amd64/10.1/All" > /usr/pkg/etc/pkgin/repositories.conf'
+          sudo pkgin -y update
+          sudo pkgin -y install rust
+          # Keep target/ outside the workspace so it isn't synced back
+          export CARGO_TARGET_DIR="$HOME/build"
+          cargo build --release --locked --bin squeezed
+          mkdir -p dist
+          cp "$CARGO_TARGET_DIR/release/squeezed" dist/squeezed
+
+      - name: Package tarball
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="${{ inputs.tag }}"
+          name="squeezed-${version}-netbsd-amd64"
+          mkdir -p dist/staging
+          install -m 0755 dist/squeezed dist/staging/squeezed
+          cp README.md LICENSE squeezed.example.toml dist/staging/
+          tar -C dist/staging -czf "dist/${name}.tar.gz" .
+          (cd dist && shasum -a 256 "${name}.tar.gz" > "${name}.tar.gz.sha256")
+          ls -lh dist
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: netbsd-amd64
+          path: dist/*.tar.gz*
+          if-no-files-found: error
+
+      - name: Attach to release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ inputs.tag }}
+          files: dist/*.tar.gz*
+          generate_release_notes: false
+          draft: false
+          prerelease: false

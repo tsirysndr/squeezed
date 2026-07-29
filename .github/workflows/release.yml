@@ -244,11 +244,14 @@ jobs:
         shell: cpa.sh {0}
         run: |
           set -euo pipefail
-          # Install Rust with pkg_add straight from the CDN mirror. This avoids
-          # pkgin's slow `ftp.NetBSD.org` summary fetch + local DB rebuild that
-          # would otherwise stall for a very long time.
-          export PKG_PATH="https://cdn.NetBSD.org/pub/pkgsrc/packages/NetBSD/amd64/10.1/All/"
-          sudo -E pkg_add -v rust
+          # Point pkgin at the fast HTTPS CDN instead of the default (painfully
+          # slow) ftp.NetBSD.org mirror, then let pkgin install Rust. Unlike
+          # bare `pkg_add`, pkgin resolves the full dependency graph and upgrades
+          # already-installed deps (e.g. the base curl 8.19.0 -> the newer curl
+          # the current Rust package requires), which is what failed before.
+          sudo sh -c 'echo "https://cdn.NetBSD.org/pub/pkgsrc/packages/NetBSD/amd64/10.1/All" > /usr/pkg/etc/pkgin/repositories.conf'
+          sudo pkgin -y update
+          sudo pkgin -y install rust
           # Keep target/ outside the workspace so it isn't synced back
           export CARGO_TARGET_DIR="$HOME/build"
           cargo build --release --locked --bin squeezed
