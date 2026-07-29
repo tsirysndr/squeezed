@@ -1,63 +1,25 @@
 //! SlimProto TCP server (port 3483 by default).
 //!
-//! Each Squeezelite instance connects, sends `HELO`, and we reply with a
-//! `strm` "start" command describing the raw-PCM format and pointing it at our
-//! HTTP endpoint. A per-client sync thread forwards server jiffies so multiple
-//! clients converge on the same playback clock, and every `STMt` heartbeat is
-//! answered with `audg` to keep Squeezelite's 36-second watchdog quiet.
+//! Each Squeezelite instance connects, sends `HELO`, and we reply with a `strm`
+//! "start" command describing the raw-PCM format and pointing it at our HTTP
+//! endpoint (with its MAC in the URL so the HTTP side can correlate the two
+//! connections). A per-client thread then sends `strm 't'` once per second: this
+//! both keeps Squeezelite's watchdog quiet and solicits a `STMt` timing report,
+//! which we feed to the [`SyncManager`] for multiroom alignment.
 
 use crate::audio::AudioFormat;
+use crate::sync::{self, SyncManager};
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
-use std::sync::{mpsc, Arc, Mutex};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
-
-/// Fans a single jiffies value out to every connected client once per second.
-pub struct SyncBroadcaster {
-    senders: Mutex<Vec<mpsc::Sender<u32>>>,
-}
-
-impl SyncBroadcaster {
-    pub fn new() -> Arc<Self> {
-        Arc::new(SyncBroadcaster {
-            senders: Mutex::new(Vec::new()),
-        })
-    }
-
-    fn subscribe(&self) -> mpsc::Receiver<u32> {
-        let (tx, rx) = mpsc::channel();
-        self.senders.lock().unwrap().push(tx);
-        rx
-    }
-
-    fn broadcast(&self, jiffies: u32) {
-        // Dropping a dead sender prunes the corresponding disconnected client.
-        self.senders.lock().unwrap().retain(|tx| tx.send(jiffies).is_ok());
-    }
-}
-
-/// Spawn the once-per-second jiffies fan-out loop.
-pub fn spawn_sync_ticker(sync: Arc<SyncBroadcaster>) {
-    std::thread::spawn(move || loop {
-        std::thread::sleep(Duration::from_secs(1));
-        sync.broadcast(server_jiffies());
-    });
-}
-
-/// Milliseconds since the Unix epoch, truncated to u32 (~49-day rollover).
-fn server_jiffies() -> u32 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_millis() as u32
-}
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 pub fn serve(
     bind_ip: &str,
     slim_port: u16,
     http_port: u16,
     format: AudioFormat,
-    sync: Arc<SyncBroadcaster>,
+    manager: Arc<SyncManager>,
 ) -> anyhow::Result<()> {
     let listener = TcpListener::bind((bind_ip, slim_port))
         .map_err(|e| anyhow::anyhow!("slim: bind {bind_ip}:{slim_port} failed: {e}"))?;
@@ -66,10 +28,8 @@ pub fn serve(
     for stream in listener.incoming() {
         match stream {
             Ok(stream) => {
-                // Subscribe before spawning so the client is registered before
-                // the next jiffies broadcast fires.
-                let sync_rx = sync.subscribe();
-                std::thread::spawn(move || handle_client(stream, http_port, format, sync_rx));
+                let manager = Arc::clone(&manager);
+                std::thread::spawn(move || handle_client(stream, http_port, format, manager));
             }
             Err(e) => tracing::warn!("slim: accept error: {e}"),
         }
@@ -81,7 +41,7 @@ fn handle_client(
     mut stream: TcpStream,
     http_port: u16,
     format: AudioFormat,
-    sync_rx: mpsc::Receiver<u32>,
+    manager: Arc<SyncManager>,
 ) {
     let peer = stream
         .peer_addr()
@@ -89,10 +49,12 @@ fn handle_client(
         .unwrap_or_default();
     tracing::info!("slim: client connected from {peer}");
 
-    match read_client_packet(&mut stream) {
+    let (mac, name) = match read_client_packet(&mut stream) {
         Ok((op, body)) if op == "HELO" => {
-            let name = parse_helo_name(&body).unwrap_or_else(|| peer.clone());
-            tracing::info!("slim: HELO from {peer} (name={name:?}, mac={})", parse_helo_mac(&body));
+            let mac = parse_helo_mac(&body);
+            let name = parse_helo_name(&body).unwrap_or_else(|| mac.clone());
+            tracing::info!("slim: HELO from {peer} (name={name:?}, mac={mac})");
+            (mac, name)
         }
         Ok((op, _)) => {
             tracing::warn!("slim: expected HELO from {peer}, got {op:?}");
@@ -102,16 +64,10 @@ fn handle_client(
             tracing::debug!("slim: read error from {peer}: {e}");
             return;
         }
-    }
+    };
 
-    if let Err(e) = send_strm_start(&mut stream, http_port, &format) {
-        tracing::error!("slim: sending strm to {peer} failed: {e}");
-        return;
-    }
-    tracing::info!("slim: sent strm to {peer} → HTTP audio on :{http_port}");
-
-    // One fd for writes (shared with the sync thread), one for reads. Both
-    // refer to the same socket; POSIX makes concurrent read/write safe.
+    // Write half, shared by the strm/audg sends, the probe ticker, and the sync
+    // engine's corrections. Both fds refer to the same socket (POSIX-safe).
     let write_stream = match stream.try_clone() {
         Ok(s) => Arc::new(Mutex::new(s)),
         Err(e) => {
@@ -120,31 +76,46 @@ fn handle_client(
         }
     };
 
-    // Sync writer thread: forward server jiffies to this client.
+    manager.add_player(mac.clone(), name.clone(), Arc::clone(&write_stream));
+
+    // Start playback: describe the format and hand the client its HTTP URL,
+    // tagged with the MAC so the HTTP server can link the connections.
+    {
+        let mut s = write_stream.lock().unwrap();
+        if let Err(e) = send_strm_start(&mut s, http_port, &format, &mac) {
+            tracing::error!("slim: sending strm to {peer} failed: {e}");
+            manager.remove_player(&mac);
+            return;
+        }
+        let _ = send_audg(&mut s); // unity gain, once
+    }
+    tracing::info!("slim: sent strm to {peer} → HTTP audio on :{http_port}");
+
+    // Probe ticker: `strm 't'` every second (timing solicitation + watchdog).
     {
         let ws = Arc::clone(&write_stream);
         let peer = peer.clone();
-        std::thread::spawn(move || {
-            for jiffies in sync_rx {
-                let mut s = ws.lock().unwrap();
-                if send_sync(&mut s, jiffies).is_err() {
-                    tracing::debug!("slim: sync write to {peer} failed");
-                    break;
-                }
+        std::thread::spawn(move || loop {
+            std::thread::sleep(Duration::from_secs(1));
+            let mut s = ws.lock().unwrap();
+            if send_strm_command(&mut s, b't', sync::server_ms()).is_err() {
+                tracing::debug!("slim: probe write to {peer} failed");
+                break;
             }
         });
     }
 
-    // Read loop: answer STMt heartbeats with audg, handle disconnect.
+    // Read loop: turn STMt timing reports into sync updates; handle disconnect.
     loop {
         match read_client_packet(&mut stream) {
             Ok((op, body)) if op == "STAT" && body.len() >= 4 => {
                 let ev = std::str::from_utf8(&body[..4]).unwrap_or("????");
                 if ev == "STMt" {
-                    let mut s = write_stream.lock().unwrap();
-                    if send_audg(&mut s).is_err() {
-                        break;
-                    }
+                    let recv_ms = sync::server_ms();
+                    let jiffies = read_u32_be(&body, 25);
+                    let elapsed_ms = read_u32_be(&body, 43);
+                    let server_ts = read_u32_be(&body, 47);
+                    manager.on_stmt(&mac, jiffies, elapsed_ms, server_ts, recv_ms);
                 } else {
                     tracing::debug!("slim: STAT {ev} from {peer}");
                 }
@@ -160,6 +131,7 @@ fn handle_client(
             }
         }
     }
+    manager.remove_player(&mac);
 }
 
 // ---------------------------------------------------------------------------
@@ -182,7 +154,11 @@ fn read_client_packet(stream: &mut TcpStream) -> std::io::Result<(String, Vec<u8
 
 /// Server → client framing: 2-byte big-endian length (opcode + payload),
 /// 4-byte opcode, payload.
-fn send_server_packet(stream: &mut TcpStream, opcode: &[u8; 4], payload: &[u8]) -> std::io::Result<()> {
+fn send_server_packet(
+    stream: &mut TcpStream,
+    opcode: &[u8; 4],
+    payload: &[u8],
+) -> std::io::Result<()> {
     let total = 4 + payload.len();
     stream.write_all(&(total as u16).to_be_bytes())?;
     stream.write_all(opcode)?;
@@ -190,8 +166,15 @@ fn send_server_packet(stream: &mut TcpStream, opcode: &[u8; 4], payload: &[u8]) 
     Ok(())
 }
 
-fn send_strm_start(stream: &mut TcpStream, http_port: u16, format: &AudioFormat) -> std::io::Result<()> {
-    let request = b"GET /stream.pcm HTTP/1.0\r\n\r\n";
+fn send_strm_start(
+    stream: &mut TcpStream,
+    http_port: u16,
+    format: &AudioFormat,
+    mac: &str,
+) -> std::io::Result<()> {
+    // MAC in the query string lets the HTTP server correlate this player's two
+    // connections (SlimProto control + HTTP audio).
+    let request = format!("GET /stream.pcm?player={mac} HTTP/1.0\r\n\r\n");
     // Format codes are validated at startup, so unwrap here is safe.
     let sample_size = format.sample_size_code().unwrap();
     let sample_rate = format.sample_rate_code().unwrap();
@@ -200,7 +183,7 @@ fn send_strm_start(stream: &mut TcpStream, http_port: u16, format: &AudioFormat)
 
     let mut payload = Vec::with_capacity(24 + request.len());
     payload.push(b's'); // command: start
-    payload.push(b'1'); // autostart
+    payload.push(b'1'); // autostart: play once buffered; the sync engine aligns
     payload.push(b'p'); // format: raw PCM
     payload.push(sample_size);
     payload.push(sample_rate);
@@ -216,11 +199,24 @@ fn send_strm_start(stream: &mut TcpStream, http_port: u16, format: &AudioFormat)
     payload.extend_from_slice(&0x0001_0000u32.to_be_bytes()); // replay_gain = 1.0
     payload.extend_from_slice(&http_port.to_be_bytes());
     payload.extend_from_slice(&0u32.to_be_bytes()); // server_ip = 0 → reuse slimproto IP
-    payload.extend_from_slice(request);
+    payload.extend_from_slice(request.as_bytes());
     send_server_packet(stream, b"strm", &payload)
 }
 
-/// `audg` — unity gain. Sent on each heartbeat to suppress the watchdog.
+/// Send a bare `strm` control command (`t`ickle / `a`skip / `p`ause / `u`npause)
+/// whose `replay_gain` field carries `value` (a timestamp, interval, or skip).
+pub(crate) fn send_strm_command(
+    stream: &mut TcpStream,
+    command: u8,
+    value: u32,
+) -> std::io::Result<()> {
+    let mut payload = [0u8; 24];
+    payload[0] = command;
+    payload[14..18].copy_from_slice(&value.to_be_bytes()); // replay_gain
+    send_server_packet(stream, b"strm", &payload)
+}
+
+/// `audg` — unity gain. Sent once so playback isn't muted.
 fn send_audg(stream: &mut TcpStream) -> std::io::Result<()> {
     let mut payload = [0u8; 9];
     payload[0..4].copy_from_slice(&0x0001_0000u32.to_be_bytes()); // left = 1.0
@@ -228,9 +224,16 @@ fn send_audg(stream: &mut TcpStream) -> std::io::Result<()> {
     send_server_packet(stream, b"audg", &payload)
 }
 
-/// `sync` — align the client's playback clock to `jiffies`.
-fn send_sync(stream: &mut TcpStream, jiffies: u32) -> std::io::Result<()> {
-    send_server_packet(stream, b"sync", &jiffies.to_be_bytes())
+fn read_u32_be(data: &[u8], offset: usize) -> u32 {
+    if data.len() < offset + 4 {
+        return 0;
+    }
+    u32::from_be_bytes([
+        data[offset],
+        data[offset + 1],
+        data[offset + 2],
+        data[offset + 3],
+    ])
 }
 
 // ---------------------------------------------------------------------------
@@ -239,7 +242,7 @@ fn send_sync(stream: &mut TcpStream, jiffies: u32) -> std::io::Result<()> {
 
 fn parse_helo_mac(body: &[u8]) -> String {
     if body.len() < 8 {
-        return "unknown".into();
+        return "000000000000".into();
     }
     let m = &body[2..8];
     format!(

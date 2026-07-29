@@ -21,7 +21,7 @@
 - **Any PCM source** — read from `stdin`, a named pipe, a unix socket, or a TCP listener.
 - **Configurable format** — sample rate, channel count, and bit depth (8/16/24/32).
 - **Zero-config playback** — answers SlimProto UDP discovery so clients find the server automatically; or point them at it with `-s host`.
-- **Multiple synchronized clients** — every player gets its own cursor into a shared rolling buffer, plus a per-second clock `sync`.
+- **True multiroom sync** — measures each player's clock and playback position and continuously nudges them so every room renders the same sample at the same instant. See [Multiroom sync](#multiroom-sync).
 - **Configurable everything** — CLI flags and/or a TOML file, with clear precedence (defaults ← file ← flags).
 - **Tiny & dependency-light** — a single static-ish binary; no LMS, no Perl, no database.
 
@@ -153,6 +153,7 @@ bind_ip   = "0.0.0.0"
 slim_port = 3483                # SlimProto control + UDP discovery
 http_port = 9000                # HTTP audio stream
 discovery = true                # answer UDP discovery
+sync      = true                # multiroom sync: keep all players sample-aligned
 name      = "squeezed"          # device/server name advertised to clients
 # buffer_bytes = 4194304        # rolling PCM retention window (~23s @ 44.1k/16/2)
 ```
@@ -180,6 +181,7 @@ squeezed --config squeezed.example.toml --http-port 9001 --name Kitchen
 | `--slim-port <PORT>` | `server.slim_port` | `3483` | SlimProto control + UDP discovery port. |
 | `--http-port <PORT>` | `server.http_port` | `9000` | HTTP audio port. |
 | `--discovery <BOOL>` | `server.discovery` | `true` | Answer UDP discovery. |
+| `--sync <BOOL>` | `server.sync` | `true` | Continuously align connected players (multiroom sync). |
 | `--name <NAME>` | `server.name` | `squeezed` | Device/server name. |
 | `--buffer-bytes <N>` | `server.buffer_bytes` | `4194304` | Rolling PCM retention window. |
 
@@ -211,16 +213,37 @@ ffmpeg -re -i hi-res.flac -f s24le -ar 48000 -ac 2 - | squeezed --sample-rate 48
 
 ---
 
-## Discovery & multiple players
+## Discovery
 
-- **Discovery** — with `discovery = true` (default), `squeezed` answers SlimProto UDP discovery on the SlimProto port, so `squeezelite` finds it with no `-s`. Because Squeezelite hard-codes discovery to port **3483**, auto-discovery only works while `slim_port` is left at the default; with a custom port, point clients at the server explicitly (`-s host:port`).
-- **Multiple players** — every connected player gets an independent cursor into a shared rolling buffer and a once-per-second clock `sync`, so they stay aligned. A player that stalls briefly is caught up from the buffer; a player that falls further behind than the retention window skips forward rather than stalling the stream.
+With `discovery = true` (default), `squeezed` answers SlimProto UDP discovery on the SlimProto port, so `squeezelite` finds it with no `-s`. Because Squeezelite hard-codes discovery to port **3483**, auto-discovery only works while `slim_port` is left at the default; with a custom port, point clients at the server explicitly (`-s host:port`).
+
+---
+
+## Multiroom sync
+
+Start players in as many rooms as you like and `squeezed` keeps them **sample-aligned** — the same audio comes out of every room at the same instant, and stays that way even though each device runs on its own crystal clock.
 
 ```bash
 squeezelite -n Kitchen      -s 192.168.1.10 &
 squeezelite -n Living-Room  -s 192.168.1.10 &
 squeezelite -n Bedroom      -s 192.168.1.10 &
 ```
+
+### How the sync works
+
+For each connected player, `squeezed`:
+
+1. **Measures its clock** — sends a SlimProto `strm 't'` timing probe once per second; the player replies with its clock and echoes the server timestamp. That round trip (kept from the lowest-latency sample) yields the offset between the player's clock and the server's, NTP-style.
+2. **Locates its playhead** — the player reports how much audio it has played; combined with the byte position at which its stream started, that gives its **absolute position in the stream**, expressed on the server clock. This is the player's *anchor*.
+3. **Corrects drift** — the most-advanced player is the reference; any player lagging behind it is told to `strm 'a'` skip-ahead by exactly the lag. Skip-ahead is the only nudge used, because squeezelite advances its play counter by the skipped amount — so the position model never drifts from reality.
+
+The result: a player that starts to fall behind is continuously pulled back into alignment. In a stress test with a player deliberately running **4 % slow**, its lag was held bounded (re-corrected every few seconds) instead of growing without limit; real devices drift by only parts-per-million, so the residual error is well under a millisecond.
+
+Turn it off with `--sync false` (or `sync = false`) for plain simultaneous playback without correction.
+
+> **Notes**
+> - Each player needs a **unique MAC** (real devices have one; multiple `squeezelite` instances on a single host must be started with `-m <mac>`). `squeezed` uses the MAC to correlate a player's control and audio connections.
+> - Sync tracks steady-state drift; it does not attempt sample-accurate *cross-fade* on join. A late joiner snaps into alignment within a few seconds of starting.
 
 ---
 
@@ -274,10 +297,11 @@ ffmpeg -re -f lavfi -i "sine=frequency=440:sample_rate=44100" -ac 2 -f s16le - |
 
 ## How it works
 
-1. **SlimProto server** (TCP, default `:3483`) accepts each Squeezelite connection, reads its `HELO`, and replies with a `strm` "start" command describing the raw-PCM format and telling the client to fetch audio over HTTP.
-2. **HTTP server** (TCP, default `:9000`) streams the shared PCM buffer to each connected player.
-3. **Input pump** reads PCM from the configured source into a one-writer / N-reader rolling **broadcast buffer**.
-4. **Sync + discovery** — a once-per-second `sync` keeps players aligned, and a UDP responder makes the server discoverable.
+1. **Input pump** reads PCM from the configured source into a one-writer / N-reader rolling **broadcast buffer**.
+2. **SlimProto server** (TCP, default `:3483`) accepts each Squeezelite connection, reads its `HELO`, and replies with a `strm` "start" command describing the raw-PCM format and telling the client to fetch audio over HTTP (with its MAC in the URL, to correlate the two connections).
+3. **HTTP server** (TCP, default `:9000`) streams the shared PCM buffer to each connected player, recording the byte position where each stream began.
+4. **Sync engine** probes each player's clock, computes its stream anchor, and issues skip-ahead corrections to hold every room in alignment (see [Multiroom sync](#multiroom-sync)).
+5. **Discovery responder** (UDP, default `:3483`) answers SlimProto discovery so clients find the server automatically.
 
 The SlimProto implementation is derived from the [`rockbox-slim`](https://github.com/tsirysndr/rockbox-zig) crate.
 

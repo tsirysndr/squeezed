@@ -61,6 +61,10 @@ pub struct Cli {
     #[arg(long, value_name = "BOOL", num_args = 0..=1, default_missing_value = "true")]
     pub discovery: Option<bool>,
 
+    /// Enable/disable multiroom synchronization of connected players (default enabled).
+    #[arg(long, value_name = "BOOL", num_args = 0..=1, default_missing_value = "true")]
+    pub sync: Option<bool>,
+
     /// Server name advertised over discovery / HELO.
     #[arg(long, value_name = "NAME")]
     pub name: Option<String>,

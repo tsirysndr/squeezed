@@ -30,6 +30,7 @@ pub struct Config {
     pub slim_port: u16,
     pub http_port: u16,
     pub discovery: bool,
+    pub sync: bool,
     pub server_name: String,
     pub buffer_bytes: usize,
 }
@@ -47,6 +48,7 @@ impl Default for Config {
             slim_port: 3483,
             http_port: 9000,
             discovery: true,
+            sync: true,
             server_name: "squeezed".to_string(),
             buffer_bytes: crate::broadcast::MAX_BUFFERED,
         }
@@ -94,6 +96,7 @@ struct FileServer {
     slim_port: Option<u16>,
     http_port: Option<u16>,
     discovery: Option<bool>,
+    sync: Option<bool>,
     name: Option<String>,
     buffer_bytes: Option<usize>,
 }
@@ -138,6 +141,9 @@ impl Config {
         if let Some(d) = f.server.discovery {
             self.discovery = d;
         }
+        if let Some(s) = f.server.sync {
+            self.sync = s;
+        }
         if let Some(n) = f.server.name {
             self.server_name = n;
         }
@@ -172,6 +178,9 @@ impl Config {
         if let Some(d) = cli.discovery {
             self.discovery = d;
         }
+        if let Some(s) = cli.sync {
+            self.sync = s;
+        }
         if let Some(n) = &cli.name {
             self.server_name = n.clone();
         }
@@ -186,24 +195,36 @@ impl Config {
 }
 
 /// Turn a source keyword plus its path/bind operands into an [`InputSource`].
-fn build_source(source: &str, path: Option<&str>, bind: Option<&str>) -> anyhow::Result<InputSource> {
+fn build_source(
+    source: &str,
+    path: Option<&str>,
+    bind: Option<&str>,
+) -> anyhow::Result<InputSource> {
     match source {
         "stdin" | "-" => Ok(InputSource::Stdin),
         "fifo" => {
             let path = path
                 .ok_or_else(|| anyhow::anyhow!("input source 'fifo' requires a path (--path)"))?;
-            Ok(InputSource::Fifo { path: path.to_string() })
+            Ok(InputSource::Fifo {
+                path: path.to_string(),
+            })
         }
         "unix" => {
             let path = path
                 .ok_or_else(|| anyhow::anyhow!("input source 'unix' requires a path (--path)"))?;
-            Ok(InputSource::Unix { path: path.to_string() })
+            Ok(InputSource::Unix {
+                path: path.to_string(),
+            })
         }
         "tcp" => {
             let bind = bind.unwrap_or("0.0.0.0:4711");
-            Ok(InputSource::Tcp { bind: bind.to_string() })
+            Ok(InputSource::Tcp {
+                bind: bind.to_string(),
+            })
         }
-        other => anyhow::bail!("unknown input source '{other}' (expected stdin, fifo, unix or tcp)"),
+        other => {
+            anyhow::bail!("unknown input source '{other}' (expected stdin, fifo, unix or tcp)")
+        }
     }
 }
 

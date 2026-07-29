@@ -7,6 +7,7 @@
 //! chunk still retained (dropping audio, never wedging the stream).
 
 use std::collections::VecDeque;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 
 /// Result of a blocking receive.
@@ -19,6 +20,10 @@ pub enum RecvResult {
 pub struct BroadcastBuffer {
     inner: Mutex<Inner>,
     condvar: Condvar,
+    /// Total bytes ever pushed — the absolute position of the live write head.
+    /// A newly-subscribing client reads this to learn where in the global
+    /// stream its playback begins (used by the sync engine's anchor math).
+    total_pushed: AtomicU64,
 }
 
 struct Inner {
@@ -43,7 +48,13 @@ impl BroadcastBuffer {
                 closed: false,
             }),
             condvar: Condvar::new(),
+            total_pushed: AtomicU64::new(0),
         })
+    }
+
+    /// Absolute byte position of the live write head (total bytes ever pushed).
+    pub fn total_pushed(&self) -> u64 {
+        self.total_pushed.load(Ordering::Acquire)
     }
 
     /// Append a chunk, evicting the oldest chunks past the size cap.
@@ -55,6 +66,8 @@ impl BroadcastBuffer {
         if g.closed {
             return;
         }
+        self.total_pushed
+            .fetch_add(data.len() as u64, Ordering::AcqRel);
         let seq = g.next_seq;
         g.next_seq += 1;
         g.total_bytes += data.len();

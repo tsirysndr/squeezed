@@ -26,6 +26,7 @@ bind_ip   = "0.0.0.0" # interface the servers listen on
 slim_port = 3483      # SlimProto control + UDP discovery port (3483 is the default clients expect)
 http_port = 9000      # HTTP port squeezelite pulls PCM from
 discovery = true      # answer UDP discovery so clients auto-find this server
+sync      = true      # multiroom sync: keep all connected players sample-aligned
 name      = "squeezed" # device/server name advertised to clients
 
 # Rolling PCM retention buffer, in bytes. A late-joining or briefly-stalled

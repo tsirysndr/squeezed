@@ -14,6 +14,7 @@ mod discovery;
 mod http;
 mod input;
 mod slim;
+mod sync;
 
 use clap::Parser;
 use cli::Cli;
@@ -28,7 +29,7 @@ fn main() -> anyhow::Result<()> {
     let retention_s = cfg.buffer_bytes as f64 / cfg.format.byte_rate().max(1) as f64;
     tracing::info!(
         "squeezed {}: name={:?}, input={}, {} Hz / {} ch / {}-bit, slim :{}, http :{}, \
-         discovery={}, buffer={} KiB (~{:.1}s)",
+         discovery={}, sync={}, buffer={} KiB (~{:.1}s)",
         env!("CARGO_PKG_VERSION"),
         cfg.server_name,
         config::describe_source(&cfg.source),
@@ -38,33 +39,34 @@ fn main() -> anyhow::Result<()> {
         cfg.slim_port,
         cfg.http_port,
         cfg.discovery,
+        cfg.sync,
         cfg.buffer_bytes / 1024,
         retention_s,
     );
 
     let buf = broadcast::BroadcastBuffer::new(cfg.buffer_bytes);
-    let sync = slim::SyncBroadcaster::new();
+    let manager = sync::SyncManager::new(cfg.format, cfg.sync);
 
     // HTTP audio server.
     {
         let buf = Arc::clone(&buf);
+        let manager = Arc::clone(&manager);
         let bind_ip = cfg.bind_ip.clone();
         let port = cfg.http_port;
         spawn_named("http", move || {
-            if let Err(e) = http::serve(&bind_ip, port, buf) {
+            if let Err(e) = http::serve(&bind_ip, port, buf, manager) {
                 fatal(e);
             }
         });
     }
 
-    // SlimProto control server + per-second sync ticker.
-    slim::spawn_sync_ticker(Arc::clone(&sync));
+    // SlimProto control server (drives per-client timing + sync corrections).
     {
         let bind_ip = cfg.bind_ip.clone();
         let (slim_port, http_port, format) = (cfg.slim_port, cfg.http_port, cfg.format);
-        let sync = Arc::clone(&sync);
+        let manager = Arc::clone(&manager);
         spawn_named("slim", move || {
-            if let Err(e) = slim::serve(&bind_ip, slim_port, http_port, format, sync) {
+            if let Err(e) = slim::serve(&bind_ip, slim_port, http_port, format, manager) {
                 fatal(e);
             }
         });

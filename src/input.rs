@@ -36,9 +36,7 @@ pub fn run(source: &InputSource, buf: Arc<BroadcastBuffer>) -> anyhow::Result<()
 
 fn run_fifo(path: &str, buf: Arc<BroadcastBuffer>) -> anyhow::Result<()> {
     if !Path::new(path).exists() {
-        anyhow::bail!(
-            "input: FIFO {path} does not exist — create it first with `mkfifo {path}`"
-        );
+        anyhow::bail!("input: FIFO {path} does not exist — create it first with `mkfifo {path}`");
     }
     tracing::info!("input: reading PCM from FIFO {path}");
     loop {
@@ -82,7 +80,10 @@ fn run_tcp(bind: &str, buf: Arc<BroadcastBuffer>) -> anyhow::Result<()> {
     for conn in listener.incoming() {
         match conn {
             Ok(stream) => {
-                let peer = stream.peer_addr().map(|a| a.to_string()).unwrap_or_default();
+                let peer = stream
+                    .peer_addr()
+                    .map(|a| a.to_string())
+                    .unwrap_or_default();
                 tracing::info!("input: tcp writer {peer} connected");
                 pump(stream, &buf);
                 tracing::info!("input: tcp writer {peer} disconnected");
