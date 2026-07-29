@@ -5,12 +5,12 @@
 `squeezed` takes a raw **PCM S16LE** audio stream from **stdin**, a **FIFO**, a **unix socket**, or a **TCP socket**, and turns it into a Squeezebox server. Point any Squeezelite instance at it — or let them auto-discover it — and the audio comes out the other end, in sync across as many players as you like.
 
 ```
-┌────────────┐   PCM    ┌──────────────────────────────────┐  SlimProto   ┌──────────────┐
+┌────────────┐   PCM    ┌───────────────────────────────────┐  SlimProto   ┌──────────────┐
 │  ffmpeg /  │ ───────► │ squeezed                          │ ◄──────────► │ squeezelite  │
 │  any PCM   │  stdin / │  • SlimProto control  (tcp :3483) │   (tcp)      │  (player 1)  │
 │  producer  │  fifo /  │  • HTTP audio stream  (tcp :9000) │  HTTP audio  ├──────────────┤
 │            │  unix /  │  • UDP discovery      (udp :3483) │ ───────────► │ squeezelite  │
-└────────────┘  tcp     └──────────────────────────────────┘              │  (player 2)  │
+└────────────┘  tcp     └───────────────────────────────────┘              │  (player 2)  │
                                                                            └──────────────┘
 ```
 
