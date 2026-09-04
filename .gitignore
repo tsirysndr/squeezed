@@ -10,3 +10,8 @@
 /dist/*.rpm
 /dist/debian/*/usr/
 /dist/rpm/*/usr/
+
+# npm package: downloaded binary + local install artifacts
+/npm/vendor/
+/npm/node_modules/
+/npm/*.tgz

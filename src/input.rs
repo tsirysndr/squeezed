@@ -5,6 +5,7 @@
 //! program); `fifo`, `unix`, and `tcp` are long-lived — when a writer
 //! disconnects we wait for the next one and keep the SlimProto clients attached.
 
+use crate::audio::AudioFormat;
 use crate::broadcast::BroadcastBuffer;
 use crate::config::InputSource;
 use std::io::Read;
@@ -19,7 +20,11 @@ const CHUNK: usize = 16 * 1024;
 
 /// Run the configured input source, pumping PCM into `buf` until the source is
 /// permanently exhausted (only `stdin` returns; the others loop forever).
-pub fn run(source: &InputSource, buf: Arc<BroadcastBuffer>) -> anyhow::Result<()> {
+pub fn run(
+    source: &InputSource,
+    format: AudioFormat,
+    buf: Arc<BroadcastBuffer>,
+) -> anyhow::Result<()> {
     match source {
         InputSource::Stdin => {
             tracing::info!("input: reading PCM from stdin");
@@ -31,6 +36,17 @@ pub fn run(source: &InputSource, buf: Arc<BroadcastBuffer>) -> anyhow::Result<()
         InputSource::Fifo { path } => run_fifo(path, buf),
         InputSource::Unix { path } => run_unix(path, buf),
         InputSource::Tcp { bind } => run_tcp(bind, buf),
+        InputSource::Virtual => {
+            #[cfg(target_os = "macos")]
+            {
+                crate::capture::run(format, buf)
+            }
+            #[cfg(not(target_os = "macos"))]
+            {
+                let _ = format;
+                anyhow::bail!("input source 'virtual' is only available on macOS")
+            }
+        }
     }
 }
 

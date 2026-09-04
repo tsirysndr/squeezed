@@ -1,0 +1,10 @@
+[package]
+name = "squeezed-driver"
+version = "0.2.0"
+edition = "2024"
+description = "Core Audio HAL AudioServerPlugIn providing the 'Squeezed' virtual output device."
+license = "MIT"
+
+[lib]
+name = "squeezed_driver"
+crate-type = ["cdylib"]

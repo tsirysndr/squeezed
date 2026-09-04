@@ -38,16 +38,25 @@
 
         craneLib = crane.mkLib pkgs;
 
-        src = craneLib.cleanCargoSource ./.;
+        # cleanCargoSource alone would drop driver/Info.plist (build.rs tracks
+        # it and `squeezed driver install` embeds it on darwin), so widen the
+        # filter to keep everything under driver/.
+        src = lib.cleanSourceWith {
+          src = ./.;
+          filter = path: type:
+            (builtins.match ".*/driver(/.*)?$" path != null)
+            || (craneLib.filterCargoSources path type);
+          name = "source";
+        };
 
-        # squeezed is pure Rust — no C dependencies, no openssl, no pkg-config.
-        # The default stdenv toolchain (for linking) is all that's needed, so
-        # there are no extra native/build inputs.
+        # squeezed is pure Rust (the darwin-only HAL plug-in is a workspace
+        # crate built by build.rs) — no openssl, no pkg-config, so there are
+        # no extra native/build inputs.
         commonArgs = {
           inherit src;
 
           pname = "squeezed";
-          version = "0.1.0";
+          version = "0.2.0";
           strictDeps = true;
 
           # Single-package crate with one bin target — build just that.

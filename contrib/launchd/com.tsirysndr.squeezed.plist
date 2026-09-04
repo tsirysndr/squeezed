@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<!--
+  Example launchd LaunchAgent that keeps squeezed running in the background
+  with the virtual input source, so the "Squeezed" output device is always
+  live. (XML comments cannot contain a double hyphen, hence the prose.)
+
+  Install (per user — a LaunchAgent, not a LaunchDaemon, because capturing
+  from the virtual device needs to run inside your login session):
+
+    cp contrib/launchd/com.tsirysndr.squeezed.plist ~/Library/LaunchAgents/
+    launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.tsirysndr.squeezed.plist
+
+  Stop / remove:
+
+    launchctl bootout gui/$(id -u)/com.tsirysndr.squeezed
+
+  Adjust the squeezed path below to where your binary lives:
+  Homebrew on Apple Silicon uses /opt/homebrew/bin/squeezed,
+  Intel /usr/local/bin/squeezed, Nix ~/.nix-profile/bin/squeezed.
+-->
+<dict>
+	<key>Label</key>
+	<string>com.tsirysndr.squeezed</string>
+	<key>ProgramArguments</key>
+	<array>
+		<string>/opt/homebrew/bin/squeezed</string>
+		<string>--source</string>
+		<string>virtual</string>
+	</array>
+	<key>RunAtLoad</key>
+	<true/>
+	<key>KeepAlive</key>
+	<true/>
+	<key>ProcessType</key>
+	<string>Interactive</string>
+	<key>StandardOutPath</key>
+	<string>/tmp/squeezed.log</string>
+	<key>StandardErrorPath</key>
+	<string>/tmp/squeezed.log</string>
+</dict>
+</plist>

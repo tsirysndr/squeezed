@@ -4,7 +4,7 @@
 //! distinguishable from "set to the default" — [`crate::config::Config`] uses
 //! that to layer defaults ← TOML ← flags with correct precedence.
 
-use clap::Parser;
+use clap::{Parser, Subcommand};
 use std::path::PathBuf;
 
 #[derive(Parser, Debug)]
@@ -13,15 +13,19 @@ use std::path::PathBuf;
     version,
     about = "Serve a raw PCM audio stream to any Squeezelite/Squeezebox client over SlimProto.",
     long_about = "squeezed reads a raw PCM (default S16LE) stream from stdin, a FIFO, a unix \
-socket, or a TCP socket, and serves it over the SlimProto protocol so any Squeezelite client \
-can play it. Configure via CLI flags and/or a TOML file (flags win)."
+socket, a TCP socket, or (on macOS) the \"Squeezed\" virtual audio output device, and serves it \
+over the SlimProto protocol so any Squeezelite client can play it. Configure via CLI flags \
+and/or a TOML file (flags win)."
 )]
 pub struct Cli {
+    #[command(subcommand)]
+    pub command: Option<Command>,
+
     /// Path to a TOML configuration file (CLI flags override its values).
     #[arg(short, long, value_name = "FILE")]
     pub config: Option<PathBuf>,
 
-    /// Input source: stdin | fifo | unix | tcp.
+    /// Input source: stdin | fifo | unix | tcp | virtual (macOS only).
     #[arg(short, long, value_name = "SOURCE")]
     pub source: Option<String>,
 
@@ -72,4 +76,33 @@ pub struct Cli {
     /// Rolling PCM buffer size in bytes (retention window).
     #[arg(long, value_name = "BYTES")]
     pub buffer_bytes: Option<usize>,
+
+    /// KB the player pre-buffers before playback — roughly the standing latency
+    /// (default 30 ≈ 170 ms at 44.1k/16/2). Lower cuts lag but risks dropouts;
+    /// raise it if audio is choppy over WiFi. 1..=255.
+    #[arg(long, value_name = "KB")]
+    pub latency_kb: Option<u8>,
+}
+
+#[derive(Subcommand, Debug)]
+pub enum Command {
+    /// Manage the "Squeezed" virtual audio output device (macOS only).
+    ///
+    /// Installs a Core Audio HAL driver that adds a "Squeezed" output device
+    /// to System Settings → Sound; audio played to it is captured by
+    /// `squeezed --source virtual` and served to Squeezelite players.
+    Driver {
+        #[command(subcommand)]
+        action: DriverAction,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+pub enum DriverAction {
+    /// Install the driver bundle to /Library/Audio/Plug-Ins/HAL (needs sudo).
+    Install,
+    /// Remove the driver bundle (needs sudo).
+    Uninstall,
+    /// Report whether the driver is installed and the device is visible.
+    Status,
 }

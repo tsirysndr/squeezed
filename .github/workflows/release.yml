@@ -61,6 +61,35 @@ jobs:
       - name: Build
         run: cargo build --release --locked --target ${{ matrix.target }} --bin squeezed
 
+      # The HAL driver is embedded in the squeezed binary (via build.rs), but
+      # we also ship the assembled .driver bundle as a standalone asset for
+      # people who want to install it manually.
+      - name: Build HAL driver crate (macOS)
+        if: startsWith(matrix.label, 'darwin')
+        run: cargo build --release --locked --target ${{ matrix.target }} -p squeezed-driver
+
+      - name: Package HAL driver bundle (macOS)
+        if: startsWith(matrix.label, 'darwin')
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            version="${{ inputs.tag }}"
+          else
+            version="${GITHUB_REF_NAME}"
+          fi
+          bundle="dist/SqueezedAudio.driver"
+          mkdir -p "$bundle/Contents/MacOS"
+          cp driver/Info.plist "$bundle/Contents/Info.plist"
+          cp "target/${{ matrix.target }}/release/libsqueezed_driver.dylib" \
+             "$bundle/Contents/MacOS/SqueezedAudio"
+          codesign --force --sign - "$bundle"
+          name="squeezed-driver-${version}-${{ matrix.label }}"
+          ditto -c -k --keepParent "$bundle" "dist/${name}.zip"
+          rm -rf "$bundle"
+          (cd dist && shasum -a 256 "${name}.zip" > "${name}.zip.sha256")
+          ls -lh dist
+
       - name: Package tarball
         shell: bash
         run: |
@@ -153,6 +182,7 @@ jobs:
             dist/*.tar.gz*
             dist/*.deb*
             dist/*.rpm*
+            dist/*.zip*
           if-no-files-found: error
 
   # FreeBSD builds quickly and reliably (`pkg install` from a fast CDN), so it

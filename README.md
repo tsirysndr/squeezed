@@ -27,6 +27,7 @@
   - [Fedora / RHEL (`dnf`)](#fedora--rhel-dnf)
   - [Nix](#nix)
   - [Homebrew](#homebrew)
+  - [npm](#npm)
   - [Download from GitHub Releases](#download-from-github-releases)
 - [Build from source](#build-from-source)
 - [Quick start](#quick-start)
@@ -35,6 +36,7 @@
   - [FIFO (named pipe)](#fifo-named-pipe)
   - [Unix domain socket](#unix-domain-socket)
   - [TCP socket](#tcp-socket)
+  - [Virtual audio device (macOS)](#virtual-audio-device-macos)
 - [Configuration](#configuration)
   - [TOML file](#toml-file)
   - [CLI reference](#cli-reference)
@@ -52,6 +54,7 @@
 ## Features
 
 - **Any PCM source** — read from `stdin`, a named pipe, a unix socket, or a TCP listener.
+- **macOS virtual output device** — `sudo squeezed driver install` adds a "Squeezed" device to System Settings → Sound; anything your Mac plays to it streams to your Squeezelite players, volume keys included. See [Virtual audio device (macOS)](#virtual-audio-device-macos).
 - **Configurable format** — sample rate, channel count, and bit depth (8/16/24/32).
 - **Zero-config playback** — answers SlimProto UDP discovery so clients find the server automatically; or point them at it with `-s host`.
 - **True multiroom sync** — measures each player's clock and playback position and continuously nudges them so every room renders the same sample at the same instant. See [Multiroom sync](#multiroom-sync).
@@ -104,6 +107,15 @@ nix run github:tsirysndr/squeezed -- --help
 
 ```sh
 brew install tsirysndr/tap/squeezed
+```
+
+### npm
+
+The [`@tsiry/squeezed`](https://www.npmjs.com/package/@tsiry/squeezed) package
+downloads the prebuilt binary for your platform from GitHub Releases on install:
+
+```sh
+npm install -g @tsiry/squeezed
 ```
 
 ### Download from GitHub Releases
@@ -217,6 +229,50 @@ squeezed --source tcp --tcp-bind 0.0.0.0:4711 &
 ffmpeg -re -i input.opus -f s16le -ar 44100 -ac 2 - | nc server-host 4711
 ```
 
+### Virtual audio device (macOS)
+
+Turn your whole Mac into the PCM source: install a Core Audio driver that adds a **"Squeezed"** output device to **System Settings → Sound → Output**. Everything the Mac plays to it — Music, Spotify, Safari, anything — is captured by `squeezed` and streamed to your players, in sync. The device has a working volume slider, and the volume/mute keys apply to what the players hear.
+
+```bash
+# one-time: install the driver bundle to /Library/Audio/Plug-Ins/HAL
+# (restarts coreaudiod — audio apps may hiccup for a second)
+sudo squeezed driver install
+
+# check it took
+squeezed driver status
+
+# run the server against the virtual device
+squeezed --source virtual
+
+# now pick "Squeezed" in System Settings → Sound → Output and press play
+```
+
+The driver is compiled into the `squeezed` binary itself — there is nothing else to download. Remove it any time with `sudo squeezed driver uninstall`.
+
+Notes:
+
+- macOS only; on other platforms `--source virtual` and the `driver` subcommand are unavailable.
+- The device runs at the configured `--sample-rate` (supported: 44100, 48000, 88200, 96000 Hz — the default 44100 is fine for almost everything).
+- While nothing is routed to the device, the players receive silence; there is no disconnect between tracks.
+- End-to-end latency ≈ the `--latency-kb` pre-buffer (default 30 KB ≈ 170 ms at 44.1k/16/2). Lower it for lip-sync with video; raise it (up to 255) if audio stutters over WiFi.
+
+#### Run at login (launchd)
+
+To keep the virtual source running in the background, install the example LaunchAgent from [`contrib/launchd/com.tsirysndr.squeezed.plist`](contrib/launchd/com.tsirysndr.squeezed.plist) (edit the binary path inside to match your install — `/opt/homebrew/bin` for Homebrew on Apple Silicon):
+
+```bash
+cp contrib/launchd/com.tsirysndr.squeezed.plist ~/Library/LaunchAgents/
+launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.tsirysndr.squeezed.plist
+```
+
+It starts at login, restarts on crash, and logs to `/tmp/squeezed.log`. Stop it with:
+
+```bash
+launchctl bootout gui/$(id -u)/com.tsirysndr.squeezed
+```
+
+It's a **LaunchAgent** (per-user), not a system LaunchDaemon, because capturing from the audio device has to happen inside your login session.
+
 ---
 
 ## Configuration
@@ -233,7 +289,7 @@ Copy [`squeezed.example.toml`](squeezed.example.toml) and edit. Every key is opt
 
 ```toml
 [input]
-source = "fifo"                 # stdin | fifo | unix | tcp
+source = "fifo"                 # stdin | fifo | unix | tcp | virtual (macOS)
 path   = "/tmp/squeezed.fifo"   # for fifo/unix
 # bind = "0.0.0.0:4711"         # for tcp
 
@@ -265,7 +321,7 @@ squeezed --config squeezed.example.toml --http-port 9001 --name Kitchen
 | Flag | TOML key | Default | Description |
 |------|----------|---------|-------------|
 | `-c, --config <FILE>` | — | — | Load a TOML config file (flags still win). |
-| `-s, --source <SRC>` | `input.source` | `stdin` | `stdin` \| `fifo` \| `unix` \| `tcp`. |
+| `-s, --source <SRC>` | `input.source` | `stdin` | `stdin` \| `fifo` \| `unix` \| `tcp` \| `virtual` (macOS). |
 | `--path <PATH>` | `input.path` | — | Path for `fifo` / `unix`. |
 | `--tcp-bind <ADDR>` | `input.bind` | `0.0.0.0:4711` | Bind address for `tcp`. |
 | `--sample-rate <HZ>` | `audio.sample_rate` | `44100` | PCM sample rate. |
@@ -278,6 +334,7 @@ squeezed --config squeezed.example.toml --http-port 9001 --name Kitchen
 | `--sync <BOOL>` | `server.sync` | `true` | Continuously align connected players (multiroom sync). |
 | `--name <NAME>` | `server.name` | `squeezed` | Device/server name. |
 | `--buffer-bytes <N>` | `server.buffer_bytes` | `4194304` | Rolling PCM retention window. |
+| `--latency-kb <KB>` | `server.latency_kb` | `30` | Player pre-buffer before playback ≈ end-to-end latency (1..=255). Lower for video sync, raise for flaky WiFi. |
 
 Logging verbosity is controlled by the `SQUEEZED_LOG` environment variable (`error`, `warn`, `info`, `debug`, `trace`; default `info`):
 
@@ -385,6 +442,8 @@ ffmpeg -re -f lavfi -i "sine=frequency=440:sample_rate=44100" -ac 2 -f s16le - |
 - **`bind … failed: Address already in use`** — something already owns the port (often a running Logitech Media Server on `3483`). Pick another with `--slim-port` / `--http-port` (and then point players with `-s host:port`).
 - **Playback is a fast-forward blur** — you forgot `-re` on ffmpeg; without it, ffmpeg pushes PCM as fast as it can. `-re` paces it to real time.
 - **Noise / wrong pitch** — the ffmpeg output format doesn't match `[audio]`. Make `-f s16le -ar <rate> -ac <n>` agree with `bits` / `sample_rate` / `channels`.
+- **"Squeezed" missing from Sound settings (macOS)** — check `squeezed driver status`. If the bundle is installed but the device isn't visible, restart coreaudiod (`sudo launchctl kickstart -kp system/com.apple.audio.coreaudiod`) or log out and back in.
+- **`--source virtual` plays silence (macOS)** — the virtual device only carries what is routed to it: pick "Squeezed" as the output in System Settings → Sound (or in the app you're playing from), and check it isn't muted / volume isn't at zero.
 - **See what's happening** — run with `SQUEEZED_LOG=debug`.
 
 ---

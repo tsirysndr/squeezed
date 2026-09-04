@@ -6,7 +6,10 @@
 # Run with:  squeezed --config squeezed.example.toml
 
 [input]
-# Where the raw PCM comes from: "stdin" | "fifo" | "unix" | "tcp"
+# Where the raw PCM comes from: "stdin" | "fifo" | "unix" | "tcp" | "virtual"
+# "virtual" (macOS only) captures the "Squeezed" virtual output device
+# installed with `sudo squeezed driver install`; it supports sample rates
+# 44100, 48000, 88200 and 96000.
 source = "stdin"
 
 # Path for the "fifo" or "unix" source (ignored otherwise).
@@ -32,3 +35,8 @@ name      = "squeezed" # device/server name advertised to clients
 # Rolling PCM retention buffer, in bytes. A late-joining or briefly-stalled
 # client is served from here. 4 MiB ≈ 23 s of 44.1 kHz S16LE stereo.
 # buffer_bytes = 4194304
+
+# KB each player pre-buffers before playback starts — this is essentially the
+# end-to-end latency. Default 30 (~170 ms at 44.1k/16/2). Lower it for
+# lip-sync with video; raise it (up to 255) if audio stutters over WiFi.
+# latency_kb = 30

@@ -1,0 +1,45 @@
+{
+  "name": "@tsiry/squeezed",
+  "version": "0.2.0",
+  "description": "Serve a raw PCM audio stream to any Squeezelite/Squeezebox client over the SlimProto protocol.",
+  "keywords": [
+    "squeezebox",
+    "slimproto",
+    "squeezelite",
+    "audio",
+    "streaming",
+    "multiroom"
+  ],
+  "license": "MIT",
+  "author": "Tsiry Sandratraina",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/tsirysndr/squeezed.git"
+  },
+  "homepage": "https://github.com/tsirysndr/squeezed#readme",
+  "bugs": {
+    "url": "https://github.com/tsirysndr/squeezed/issues"
+  },
+  "bin": {
+    "squeezed": "bin/squeezed.js"
+  },
+  "files": [
+    "bin/",
+    "install.js"
+  ],
+  "scripts": {
+    "postinstall": "node install.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "os": [
+    "darwin",
+    "linux",
+    "freebsd"
+  ],
+  "cpu": [
+    "x64",
+    "arm64"
+  ]
+}

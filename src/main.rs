@@ -8,9 +8,13 @@
 
 mod audio;
 mod broadcast;
+#[cfg(target_os = "macos")]
+mod capture;
 mod cli;
 mod config;
 mod discovery;
+#[cfg(target_os = "macos")]
+mod driver;
 mod http;
 mod input;
 mod slim;
@@ -23,13 +27,18 @@ use std::sync::Arc;
 
 fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
+    if let Some(command) = &cli.command {
+        init_tracing();
+        return run_command(command);
+    }
     let cfg = Config::resolve(&cli)?;
     init_tracing();
 
     let retention_s = cfg.buffer_bytes as f64 / cfg.format.byte_rate().max(1) as f64;
+    let latency_ms = cfg.latency_kb as f64 * 1024.0 / cfg.format.byte_rate().max(1) as f64 * 1000.0;
     tracing::info!(
         "squeezed {}: name={:?}, input={}, {} Hz / {} ch / {}-bit, slim :{}, http :{}, \
-         discovery={}, sync={}, buffer={} KiB (~{:.1}s)",
+         discovery={}, sync={}, buffer={} KiB (~{:.1}s), latency={} KB (~{:.0} ms)",
         env!("CARGO_PKG_VERSION"),
         cfg.server_name,
         config::describe_source(&cfg.source),
@@ -42,6 +51,8 @@ fn main() -> anyhow::Result<()> {
         cfg.sync,
         cfg.buffer_bytes / 1024,
         retention_s,
+        cfg.latency_kb,
+        latency_ms,
     );
 
     let buf = broadcast::BroadcastBuffer::new(cfg.buffer_bytes);
@@ -64,9 +75,11 @@ fn main() -> anyhow::Result<()> {
     {
         let bind_ip = cfg.bind_ip.clone();
         let (slim_port, http_port, format) = (cfg.slim_port, cfg.http_port, cfg.format);
+        let latency_kb = cfg.latency_kb;
         let manager = Arc::clone(&manager);
         spawn_named("slim", move || {
-            if let Err(e) = slim::serve(&bind_ip, slim_port, http_port, format, manager) {
+            if let Err(e) = slim::serve(&bind_ip, slim_port, http_port, format, manager, latency_kb)
+            {
                 fatal(e);
             }
         });
@@ -86,10 +99,31 @@ fn main() -> anyhow::Result<()> {
     }
 
     // Pump the input on the main thread; when it returns, drain and exit.
-    input::run(&cfg.source, Arc::clone(&buf))?;
+    input::run(&cfg.source, cfg.format, Arc::clone(&buf))?;
     buf.close();
     tracing::info!("squeezed: input ended, shutting down");
     Ok(())
+}
+
+/// Dispatch a management subcommand (currently only `driver`, macOS only).
+fn run_command(command: &cli::Command) -> anyhow::Result<()> {
+    match command {
+        cli::Command::Driver { action } => {
+            #[cfg(target_os = "macos")]
+            {
+                match action {
+                    cli::DriverAction::Install => driver::install(),
+                    cli::DriverAction::Uninstall => driver::uninstall(),
+                    cli::DriverAction::Status => driver::status(),
+                }
+            }
+            #[cfg(not(target_os = "macos"))]
+            {
+                let _ = action;
+                anyhow::bail!("the `driver` subcommand is only available on macOS")
+            }
+        }
+    }
 }
 
 fn init_tracing() {

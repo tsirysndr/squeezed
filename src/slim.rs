@@ -20,6 +20,7 @@ pub fn serve(
     http_port: u16,
     format: AudioFormat,
     manager: Arc<SyncManager>,
+    latency_kb: u8,
 ) -> anyhow::Result<()> {
     let listener = TcpListener::bind((bind_ip, slim_port))
         .map_err(|e| anyhow::anyhow!("slim: bind {bind_ip}:{slim_port} failed: {e}"))?;
@@ -29,7 +30,9 @@ pub fn serve(
         match stream {
             Ok(stream) => {
                 let manager = Arc::clone(&manager);
-                std::thread::spawn(move || handle_client(stream, http_port, format, manager));
+                std::thread::spawn(move || {
+                    handle_client(stream, http_port, format, manager, latency_kb)
+                });
             }
             Err(e) => tracing::warn!("slim: accept error: {e}"),
         }
@@ -42,6 +45,7 @@ fn handle_client(
     http_port: u16,
     format: AudioFormat,
     manager: Arc<SyncManager>,
+    latency_kb: u8,
 ) {
     let peer = stream
         .peer_addr()
@@ -82,7 +86,7 @@ fn handle_client(
     // tagged with the MAC so the HTTP server can link the connections.
     {
         let mut s = write_stream.lock().unwrap();
-        if let Err(e) = send_strm_start(&mut s, http_port, &format, &mac) {
+        if let Err(e) = send_strm_start(&mut s, http_port, &format, &mac, latency_kb) {
             tracing::error!("slim: sending strm to {peer} failed: {e}");
             manager.remove_player(&mac);
             return;
@@ -171,6 +175,7 @@ fn send_strm_start(
     http_port: u16,
     format: &AudioFormat,
     mac: &str,
+    latency_kb: u8,
 ) -> std::io::Result<()> {
     // MAC in the query string lets the HTTP server correlate this player's two
     // connections (SlimProto control + HTTP audio).
@@ -189,7 +194,7 @@ fn send_strm_start(
     payload.push(sample_rate);
     payload.push(channels);
     payload.push(endianness);
-    payload.push(255); // in-threshold (KB) before autostart
+    payload.push(latency_kb.max(1)); // in-threshold (KB) before autostart ≈ latency
     payload.push(0); // spdif_enable
     payload.push(0); // transition_period
     payload.push(b'0'); // transition_type: none

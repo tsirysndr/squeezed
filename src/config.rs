@@ -19,6 +19,9 @@ pub enum InputSource {
     Unix { path: String },
     /// TCP listener at `bind` (e.g. `0.0.0.0:4711`).
     Tcp { bind: String },
+    /// The "Squeezed" virtual audio output device (macOS only; see
+    /// `squeezed driver install`).
+    Virtual,
 }
 
 /// Fully-resolved runtime configuration.
@@ -33,6 +36,11 @@ pub struct Config {
     pub sync: bool,
     pub server_name: String,
     pub buffer_bytes: usize,
+    /// KB the player pre-buffers before playback starts. Also the approximate
+    /// standing latency once playing (a realtime source keeps the buffer near
+    /// this level). Lower = less lag but more prone to dropouts on jittery
+    /// networks. 1..=255.
+    pub latency_kb: u8,
 }
 
 impl Default for Config {
@@ -51,6 +59,7 @@ impl Default for Config {
             sync: true,
             server_name: "squeezed".to_string(),
             buffer_bytes: crate::broadcast::MAX_BUFFERED,
+            latency_kb: 30,
         }
     }
 }
@@ -73,7 +82,7 @@ struct FileConfig {
 #[derive(Debug, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct FileInput {
-    /// "stdin" | "fifo" | "unix" | "tcp"
+    /// "stdin" | "fifo" | "unix" | "tcp" | "virtual" (macOS only)
     source: Option<String>,
     /// Path for fifo/unix sources.
     path: Option<String>,
@@ -99,6 +108,7 @@ struct FileServer {
     sync: Option<bool>,
     name: Option<String>,
     buffer_bytes: Option<usize>,
+    latency_kb: Option<u8>,
 }
 
 impl Config {
@@ -150,6 +160,9 @@ impl Config {
         if let Some(b) = f.server.buffer_bytes {
             self.buffer_bytes = b;
         }
+        if let Some(l) = f.server.latency_kb {
+            self.latency_kb = l.max(1);
+        }
         if let Some(src) = f.input.source {
             self.source = build_source(&src, f.input.path.as_deref(), f.input.bind.as_deref())?;
         }
@@ -187,6 +200,9 @@ impl Config {
         if let Some(b) = cli.buffer_bytes {
             self.buffer_bytes = b;
         }
+        if let Some(l) = cli.latency_kb {
+            self.latency_kb = l.max(1);
+        }
         if let Some(src) = &cli.source {
             self.source = build_source(src, cli.path.as_deref(), cli.tcp_bind.as_deref())?;
         }
@@ -222,8 +238,17 @@ fn build_source(
                 bind: bind.to_string(),
             })
         }
+        "virtual" => {
+            if cfg!(target_os = "macos") {
+                Ok(InputSource::Virtual)
+            } else {
+                anyhow::bail!("input source 'virtual' (the Squeezed virtual audio device) is only available on macOS")
+            }
+        }
         other => {
-            anyhow::bail!("unknown input source '{other}' (expected stdin, fifo, unix or tcp)")
+            anyhow::bail!(
+                "unknown input source '{other}' (expected stdin, fifo, unix, tcp or virtual)"
+            )
         }
     }
 }
@@ -235,5 +260,6 @@ pub fn describe_source(source: &InputSource) -> String {
         InputSource::Fifo { path } => format!("fifo {path}"),
         InputSource::Unix { path } => format!("unix {path}"),
         InputSource::Tcp { bind } => format!("tcp {bind}"),
+        InputSource::Virtual => "virtual (Squeezed macOS audio device)".to_string(),
     }
 }
