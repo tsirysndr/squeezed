@@ -11,8 +11,14 @@ use crate::audio::AudioFormat;
 use crate::sync::{self, SyncManager};
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
+
+/// Unique id per SlimProto connection. The sync registry keys on this (not the
+/// MAC) so same-MAC sessions — reconnect races, or two instances started
+/// without `-m` — can never corrupt each other's timing state.
+static NEXT_SID: AtomicU64 = AtomicU64::new(1);
 
 pub fn serve(
     bind_ip: &str,
@@ -80,15 +86,16 @@ fn handle_client(
         }
     };
 
-    manager.add_player(mac.clone(), name.clone(), Arc::clone(&write_stream));
+    let sid = NEXT_SID.fetch_add(1, Ordering::Relaxed);
+    manager.add_player(sid, mac.clone(), name.clone(), Arc::clone(&write_stream));
 
     // Start playback: describe the format and hand the client its HTTP URL,
-    // tagged with the MAC so the HTTP server can link the connections.
+    // tagged with the session id so the HTTP server can link the connections.
     {
         let mut s = write_stream.lock().unwrap();
-        if let Err(e) = send_strm_start(&mut s, http_port, &format, &mac, latency_kb) {
+        if let Err(e) = send_strm_start(&mut s, http_port, &format, &mac, sid, latency_kb) {
             tracing::error!("slim: sending strm to {peer} failed: {e}");
-            manager.remove_player(&mac);
+            manager.remove_player(sid);
             return;
         }
         let _ = send_audg(&mut s); // unity gain, once
@@ -104,6 +111,8 @@ fn handle_client(
             let mut s = ws.lock().unwrap();
             if send_strm_command(&mut s, b't', sync::server_ms()).is_err() {
                 tracing::debug!("slim: probe write to {peer} failed");
+                // Wake the read loop so the session is reaped promptly.
+                let _ = s.shutdown(std::net::Shutdown::Both);
                 break;
             }
         });
@@ -119,14 +128,22 @@ fn handle_client(
                     let jiffies = read_u32_be(&body, 25);
                     let elapsed_ms = read_u32_be(&body, 43);
                     let server_ts = read_u32_be(&body, 47);
-                    manager.on_stmt(&mac, jiffies, elapsed_ms, server_ts, recv_ms);
+                    manager.on_stmt(sid, jiffies, elapsed_ms, server_ts, recv_ms);
                 } else {
                     tracing::debug!("slim: STAT {ev} from {peer}");
                 }
             }
             Ok((op, _)) if op == "DSCO" => {
-                tracing::info!("slim: DSCO from {peer}");
-                break;
+                // DSCO means the player's *stream* (HTTP) connection dropped —
+                // the player itself is still with us. Forget its stale anchor
+                // and restart the stream; it re-anchors when HTTP reattaches.
+                tracing::info!("slim: DSCO from {peer} — restarting stream");
+                manager.clear_http_start(sid);
+                let mut s = write_stream.lock().unwrap();
+                if send_strm_start(&mut s, http_port, &format, &mac, sid, latency_kb).is_err() {
+                    tracing::info!("slim: stream restart to {peer} failed");
+                    break;
+                }
             }
             Ok((op, _)) => tracing::debug!("slim: {op} from {peer}"),
             Err(_) => {
@@ -135,7 +152,7 @@ fn handle_client(
             }
         }
     }
-    manager.remove_player(&mac);
+    manager.remove_player(sid);
 }
 
 // ---------------------------------------------------------------------------
@@ -175,11 +192,13 @@ fn send_strm_start(
     http_port: u16,
     format: &AudioFormat,
     mac: &str,
+    sid: u64,
     latency_kb: u8,
 ) -> std::io::Result<()> {
-    // MAC in the query string lets the HTTP server correlate this player's two
-    // connections (SlimProto control + HTTP audio).
-    let request = format!("GET /stream.pcm?player={mac} HTTP/1.0\r\n\r\n");
+    // The session id in the query string lets the HTTP server correlate this
+    // player's two connections (SlimProto control + HTTP audio); the MAC is
+    // included for log readability only.
+    let request = format!("GET /stream.pcm?player={mac}&sid={sid} HTTP/1.0\r\n\r\n");
     // Format codes are validated at startup, so unwrap here is safe.
     let sample_size = format.sample_size_code().unwrap();
     let sample_rate = format.sample_rate_code().unwrap();

@@ -389,14 +389,18 @@ For each connected player, `squeezed`:
 
 1. **Measures its clock** — sends a SlimProto `strm 't'` timing probe once per second; the player replies with its clock and echoes the server timestamp. That round trip (kept from the lowest-latency sample) yields the offset between the player's clock and the server's, NTP-style.
 2. **Locates its playhead** — the player reports how much audio it has played; combined with the byte position at which its stream started, that gives its **absolute position in the stream**, expressed on the server clock. This is the player's *anchor*.
-3. **Corrects drift** — the most-advanced player is the reference; any player lagging behind it is told to `strm 'a'` skip-ahead by exactly the lag. Skip-ahead is the only nudge used, because squeezelite advances its play counter by the skipped amount — so the position model never drifts from reality.
+3. **Corrects drift** — the most-*delayed* player is the reference; any player running ahead of it is told to `strm 'p'` (timed pause) for exactly the difference. Squeezelite plays the pause as inserted silence, in full, without discarding any buffered audio — so the paused player's buffer *grows* by the pause length, and its play counter (which counts only real frames) keeps the position model honest.
 
-The result: a player that starts to fall behind is continuously pulled back into alignment. In a stress test with a player deliberately running **4 % slow**, its lag was held bounded (re-corrected every few seconds) instead of growing without limit; real devices drift by only parts-per-million, so the residual error is well under a millisecond.
+Aligning to the laggard (rather than skipping laggards forward to the fastest player) matters for a *live* stream: the most-advanced player is by definition the one with the least audio buffered, so pulling everyone up to it would leave every room with a near-empty buffer, one WiFi hiccup away from underrun. Pausing the leaders instead gives every player the laggard's safety margin — at the cost of a little end-to-end latency.
+
+Two safeguards keep a misbehaving player from ruining the group. A player whose playback position is *receding* (its output stalled — suspended machine, hung audio device) is never used as the reference and is never corrected until it stabilizes. And the group only follows a laggard so far: a player parked more than ~1.5 s behind the most-advanced player is skipped *forward* to the group (`strm 'a'`) instead of the group sinking down to it — its stream kept flowing while its output was stalled, so the catch-up skip simply drains the surplus audio sitting in its buffer.
+
+The result: a player that stalls or drifts is re-aligned within one correction round (verified in test: a forced 500 ms stall on one player produced a single compensating pause on the other, returning the group to ≤1 ms spread). Real devices drift by only parts-per-million, so steady-state corrections are rare and small.
 
 Turn it off with `--sync false` (or `sync = false`) for plain simultaneous playback without correction.
 
 > **Notes**
-> - Each player needs a **unique MAC** (real devices have one; multiple `squeezelite` instances on a single host must be started with `-m <mac>`). `squeezed` uses the MAC to correlate a player's control and audio connections.
+> - Every connection is tracked by a per-session id, so even multiple `squeezelite` instances sharing a MAC sync correctly. Giving each instance its own `-m <mac>` is still recommended — it makes the logs legible.
 > - Sync tracks steady-state drift; it does not attempt sample-accurate *cross-fade* on join. A late joiner snaps into alignment within a few seconds of starting.
 
 ---
@@ -456,7 +460,7 @@ ffmpeg -re -f lavfi -i "sine=frequency=440:sample_rate=44100" -ac 2 -f s16le - |
 1. **Input pump** reads PCM from the configured source into a one-writer / N-reader rolling **broadcast buffer**.
 2. **SlimProto server** (TCP, default `:3483`) accepts each Squeezelite connection, reads its `HELO`, and replies with a `strm` "start" command describing the raw-PCM format and telling the client to fetch audio over HTTP (with its MAC in the URL, to correlate the two connections).
 3. **HTTP server** (TCP, default `:9000`) streams the shared PCM buffer to each connected player, recording the byte position where each stream began.
-4. **Sync engine** probes each player's clock, computes its stream anchor, and issues skip-ahead corrections to hold every room in alignment (see [Multiroom sync](#multiroom-sync)).
+4. **Sync engine** probes each player's clock, computes its stream anchor, and issues timed-pause corrections to hold every room in alignment (see [Multiroom sync](#multiroom-sync)).
 5. **Discovery responder** (UDP, default `:3483`) answers SlimProto discovery so clients find the server automatically.
 
 The SlimProto implementation is derived from the [`rockbox-slim`](https://github.com/tsirysndr/rockbox-zig) crate.

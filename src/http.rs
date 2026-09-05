@@ -1,7 +1,8 @@
 //! Minimal HTTP/1.0 server that streams the shared PCM buffer.
 //!
 //! When Squeezelite receives our `strm` command it opens an HTTP connection
-//! here (with `?player=<mac>` in the URL) and reads raw PCM until end of stream.
+//! here (with `?player=<mac>&sid=<session>` in the URL) and reads raw PCM
+//! until end of stream.
 //! Each connection gets its own [`BroadcastReceiver`]; we also record the
 //! absolute byte position of the live head at attach time and hand it to the
 //! [`SyncManager`] as this player's anchor.
@@ -61,19 +62,28 @@ fn handle(mut stream: TcpStream, buf: Arc<BroadcastBuffer>, manager: Arc<SyncMan
         return;
     }
 
-    // Anchor this player at the current live-head byte position, then subscribe.
-    // Reading total_pushed just before subscribe keeps the anchor and the read
-    // cursor within one chunk of each other.
-    let b_start = buf.total_pushed();
+    // Subscribe, then anchor this player at the exact byte its stream begins
+    // (captured atomically by subscribe, so the anchor can't race a push).
     let mut rx = buf.subscribe();
-    if let Some(mac) = parse_player_mac(&request_line) {
-        manager.set_http_start(&mac, b_start);
+    let sid = parse_session_id(&request_line);
+    if let Some(sid) = sid {
+        manager.set_http_start(sid, rx.position());
     }
 
     tracing::info!("http: client {peer} attached to stream");
     loop {
         match rx.recv_blocking() {
-            RecvResult::Data(chunk) => {
+            RecvResult::Data {
+                chunk,
+                skipped_bytes,
+            } => {
+                if skipped_bytes > 0 {
+                    // Retention dropped stream this reader never got; shift its
+                    // anchor so the sync model tracks what it actually plays.
+                    if let Some(sid) = sid {
+                        manager.advance_http_start(sid, skipped_bytes);
+                    }
+                }
                 if stream.write_all(&chunk).is_err() {
                     tracing::info!("http: client {peer} disconnected");
                     break;
@@ -102,14 +112,15 @@ fn read_request(stream: &mut TcpStream) -> std::io::Result<String> {
     Ok(text.lines().next().unwrap_or("").to_string())
 }
 
-/// Extract `<mac>` from a request line like `GET /stream.pcm?player=<mac> HTTP/1.0`.
-fn parse_player_mac(request_line: &str) -> Option<String> {
+/// Extract the session id from a request line like
+/// `GET /stream.pcm?player=<mac>&sid=<sid> HTTP/1.0`.
+fn parse_session_id(request_line: &str) -> Option<u64> {
     let path = request_line.split_whitespace().nth(1)?;
     let query = path.split_once('?')?.1;
     for pair in query.split('&') {
-        if let Some(mac) = pair.strip_prefix("player=") {
-            if !mac.is_empty() {
-                return Some(mac.to_string());
+        if let Some(sid) = pair.strip_prefix("sid=") {
+            if let Ok(sid) = sid.parse() {
+                return Some(sid);
             }
         }
     }
