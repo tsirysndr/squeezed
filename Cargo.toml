@@ -3,7 +3,7 @@ members = ["driver"]
 
 [package]
 name = "squeezed"
-version = "0.2.0"
+version = "0.2.1"
 edition = "2021"
 description = "Serve a raw PCM audio stream to any Squeezelite / Squeezebox client over the SlimProto protocol."
 license = "MIT"

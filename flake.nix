@@ -56,7 +56,7 @@
           inherit src;
 
           pname = "squeezed";
-          version = "0.2.0";
+          version = "0.2.1";
           strictDeps = true;
 
           # Single-package crate with one bin target — build just that.
