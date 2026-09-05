@@ -341,7 +341,11 @@ impl SyncManager {
                         "sync: {} {verb} by {:.0}ms → {} {amount}ms",
                         p.name,
                         decision.error_ms.abs(),
-                        if command == b'p' { "pause" } else { "skip-ahead" },
+                        if command == b'p' {
+                            "pause"
+                        } else {
+                            "skip-ahead"
+                        },
                     );
                 }
                 Err(e) => tracing::debug!("sync: correction send to {} failed: {e}", p.name),
@@ -521,11 +525,7 @@ mod tests {
     fn parked_player_is_skipped_forward_not_followed() {
         // 3 is 20s behind — parked after a stall, far beyond the follow band.
         // The group aligns to the in-band laggard (2); 3 is skipped forward.
-        let snaps = vec![
-            snap(1, 1000.0, 0),
-            snap(2, 1050.0, 0),
-            snap(3, 21_050.0, 0),
-        ];
+        let snaps = vec![snap(1, 1000.0, 0), snap(2, 1050.0, 0), snap(3, 21_050.0, 0)];
         let d = decide_corrections(&snaps, 100_000);
         assert_eq!(d.len(), 2);
         let one = d.iter().find(|x| x.sid == 1).unwrap();
@@ -557,8 +557,7 @@ mod tests {
         ];
         let d = decide_corrections(&snaps, 100_000);
         assert_eq!(d.len(), 3);
-        let by_sid: std::collections::HashMap<_, _> =
-            d.iter().map(|x| (x.sid, x)).collect();
+        let by_sid: std::collections::HashMap<_, _> = d.iter().map(|x| (x.sid, x)).collect();
         assert_eq!(pause_of(by_sid[&1]), 42);
         assert_eq!(skip_of(by_sid[&3]), MAX_SKIP_MS);
         assert_eq!(skip_of(by_sid[&4]), MAX_SKIP_MS);
