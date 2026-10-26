@@ -3,8 +3,6 @@ module CI.Nix (nixArgs, flake, package) where
 import Prelude
 import Dagger (Client)
 import Dagger.Container as Container
-import Dagger.CurrentModule as CurrentModule
-import Dagger.Directory as Directory
 import Dagger.Modules as Module
 import Dagger.Query as Query
 import Dagger.Types (Directory, Secret)
@@ -21,7 +19,7 @@ nixArgs = ado
   in { source, cachixToken, runId }
 
 build :: String -> Client -> NixArgs -> Aff String
-build mode client args = do
+build _ client args = do
   let
     image = Query.container client # Container.from "nixos/nix:2.28.5"
     store = Query.cacheVolume "squeezed-nix-store" client
@@ -33,19 +31,22 @@ build mode client args = do
       # Container.withEnvVariable "NIX_RUN" args.runId
       # Container.withExec [ "cp", "-an", "/seed/.", "/nix/" ]
   void $ Container.sync seed
-  void $ Container.sync $ image
-    # Container.withMountedCache "/nix" store
-    # Container.withEnvVariable "NIX_REMOTE" "local"
-    # Container.withEnvVariable "NIX_CONFIG" "experimental-features = nix-command flakes\nsandbox = false\nbuild-users-group =\n"
-    # Container.withEnvVariable "NIX_PATH" "nixpkgs=channel:nixos-unstable"
-    # Container.withDirectory "/pipeline" (Query.currentModule client # CurrentModule.source # Directory.directory "scripts")
-    # Container.withDirectoryWith "/src" args.source
-        (Container.defaultWithDirectoryOpts
-          { exclude = Just [ ".git", ".dagger", ".source", "**/target", "**/node_modules", "**/.env", "**/.env.*", "result", "result-*", "*.db*", "covers", "smolsonic.toml" ] })
-    # Container.withSecretVariable "CACHIX_AUTH_TOKEN" args.cachixToken
-    # Container.withEnvVariable "NIX_RUN" args.runId
-    # Container.withExec [ "sh", "/pipeline/nix.sh", mode ]
-  pure "Nix build completed"
+  let
+    environment = image
+      # Container.withMountedCache "/nix" store
+      # Container.withEnvVariable "NIX_REMOTE" "local"
+      # Container.withEnvVariable "NIX_CONFIG" "experimental-features = nix-command flakes\nsandbox = false\nbuild-users-group =\n"
+      # Container.withEnvVariable "NIX_PATH" "nixpkgs=channel:nixos-unstable"
+      # Container.withDirectoryWith "/src" args.source
+          (Container.defaultWithDirectoryOpts
+            { exclude = Just [ ".git", ".dagger", ".source", "**/target", "**/node_modules", "**/.env", "**/.env.*", "result", "result-*", "*.db*", "covers", "smolsonic.toml" ] })
+      # Container.withSecretVariable "CACHIX_AUTH_TOKEN" args.cachixToken
+      # Container.withEnvVariable "NIX_RUN" args.runId
+  void $ Container.sync $ environment
+    # Container.withWorkdir "/src"
+    # Container.withExec [ "nix", "build", ".#default", "-L" ]
+    # Container.withExec [ "nix", "flake", "check", "-L" ]
+  pure "Nix build and checks completed"
 
 flake :: Client -> NixArgs -> Aff String
 flake = build "flake"
