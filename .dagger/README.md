@@ -4,17 +4,18 @@ Linux x86_64 and aarch64 releases, tarballs, Debian packages, x86_64 RPMs, Linux
 
 The workflows use Dagger **v1.0.0-beta.21** and the vendored PureScript SDK.
 The module lives in `ci/src/`; `Main.purs` exposes typed functions and `CI/`
-contains the implementation. Small shell scripts handle native package tools.
+contains the implementation. Packaging, release decisions, file enumeration, and command arguments are
+implemented in PureScript. External tools run directly through `withExec`;
+there are no project-owned shell scripts or embedded shell programs in the pipeline.
 Images are pinned in the root `dagger.lock`.
 
 ## Run a function
 
-From the repository root, install the checksum-verified CLI, then enter the
-workspace. The installer supports Linux and macOS, x86_64 and ARM64.
+Install Dagger v1.0.0-beta.21 using the [official installation guide](https://docs.dagger.io/install),
+then enter the workspace. GitHub Actions uses the commit-pinned official Dagger
+action in install-only mode; this repository does not maintain a CLI installer.
 
 ```sh
-bash .dagger/install-dagger.sh
-export PATH="$PWD/.dagger/bin:$PATH"
 cd .dagger
 dagger api call -m ci linux-release --source .. \
   --target x86_64-unknown-linux-gnu --version v0.1.0 --output ../dist
@@ -62,7 +63,7 @@ need the Dagger CLI and a supported engine/container runtime on the host.
 For a fast type check without starting Dagger, install PureScript and Spago on
 your development machine, then run `spago build --strict` in `.dagger/ci`.
 The committed bindings and Spago lockfile make this independent of codegen.
-Run `node --test .dagger/tests/*.test.mjs` from the repository root for
+After compiling `.dagger/ci`, run `node --test .dagger/tests/*.test.mjs` from the repository root for
 SDK HTTP deadline/error and isolated release-upload regression checks. To intentionally regenerate
 bindings, run `python3 .dagger/generate.py`; this starts Dagger and stages only
 the pipeline workspace, not the application tree.
@@ -71,7 +72,7 @@ See [SDK provenance and local patches](sdk/purescript/VENDORED.md) before
 updating the vendored SDK. Retain its LICENSE, NOTICE and schema license.
 
 The migration was checked with strict PureScript compilation, workflow lint,
-shell syntax checks and SDK transport tests. Full Dagger builds and publishing
+PureScript pipeline tests and SDK transport tests. Full Dagger builds and publishing
 were deliberately left to GitHub Actions; they were not run locally.
 
 Native macOS and BSD builds, and FlakeHub OIDC publishing, remain outside Dagger.
