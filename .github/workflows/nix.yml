@@ -17,14 +17,17 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Install Nix
-        uses: cachix/install-nix-action@v27
+      - name: Install Dagger
+        run: bash .dagger/install-dagger.sh
+
+      - name: Run PureScript Dagger pipeline
+        uses: ./.github/actions/dagger
+        env:
+          CACHIX_AUTH_TOKEN: ""
+          WORKFLOW_RUN: ${{ github.run_id }}-${{ github.run_attempt }}
         with:
-          extra_nix_config: |
-            experimental-features = nix-command flakes
-
-      - name: Build package
-        run: nix build .#default -L
-
-      - name: Flake checks (clippy, fmt, audit, tests)
-        run: nix flake check -L
+          module: ci
+          key: nix-flake
+          volumes: squeezed-nix-store
+          command: |
+            dagger api call -m ci nix-build --source .. --cachix-token env://CACHIX_AUTH_TOKEN --run-id "$WORKFLOW_RUN"

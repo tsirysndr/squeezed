@@ -15,3 +15,6 @@
 /npm/vendor/
 /npm/node_modules/
 /npm/*.tgz
+
+# Separate application checkout used by manually dispatched Dagger workflows.
+/.source/

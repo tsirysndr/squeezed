@@ -470,3 +470,8 @@ The SlimProto implementation is derived from the [`rockbox-slim`](https://github
 ## License
 
 [MIT](LICENSE) © Tsiry Sandratraina
+
+## CI pipelines
+
+Portable GitHub Actions jobs use [PureScript Dagger modules](.dagger/README.md).
+See that guide for commands, caching, and the jobs that remain native.

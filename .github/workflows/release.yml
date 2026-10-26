@@ -38,7 +38,36 @@ jobs:
             target: aarch64-unknown-linux-gnu
 
     steps:
+      - name: Checkout pipeline
+        if: runner.os == 'Linux'
+        uses: actions/checkout@v4
+
+      - name: Checkout release source
+        if: runner.os == 'Linux'
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+          path: .source
+
+      - name: Install Dagger
+        if: runner.os == 'Linux'
+        run: bash .dagger/install-dagger.sh
+
+      - name: Run PureScript Dagger pipeline
+        if: runner.os == 'Linux'
+        uses: ./.github/actions/dagger
+        env:
+          TARGET: ${{ matrix.target }}
+          VERSION: ${{ inputs.tag || github.ref_name }}
+        with:
+          module: ci
+          key: release-${{ matrix.target }}
+          volumes: squeezed-cargo-registry,squeezed-cargo-git,squeezed-target-${{ matrix.target }}
+          command: |
+            dagger api call -m ci linux-release --source ../.source --target "$TARGET" --version "$VERSION" --output ../dist
+
       - name: Checkout
+        if: runner.os == 'macOS'
         uses: actions/checkout@v4
         with:
           # On manual dispatch, build the tag's code rather than the branch
@@ -46,11 +75,13 @@ jobs:
           ref: ${{ inputs.tag || github.ref }}
 
       - name: Install Rust toolchain
+        if: runner.os == 'macOS'
         uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
 
       - name: Cache cargo
+        if: runner.os == 'macOS'
         uses: Swatinem/rust-cache@v2
         with:
           # Key on the unique per-job label, not the OS: darwin-amd64 and
@@ -59,17 +90,19 @@ jobs:
           key: ${{ matrix.label }}
 
       - name: Build
+        if: runner.os == 'macOS'
         run: cargo build --release --locked --target ${{ matrix.target }} --bin squeezed
 
       # The HAL driver is embedded in the squeezed binary (via build.rs), but
       # we also ship the assembled .driver bundle as a standalone asset for
       # people who want to install it manually.
+
       - name: Build HAL driver crate (macOS)
-        if: startsWith(matrix.label, 'darwin')
+        if: runner.os == 'macOS'
         run: cargo build --release --locked --target ${{ matrix.target }} -p squeezed-driver
 
       - name: Package HAL driver bundle (macOS)
-        if: startsWith(matrix.label, 'darwin')
+        if: runner.os == 'macOS'
         shell: bash
         run: |
           set -euo pipefail
@@ -91,6 +124,7 @@ jobs:
           ls -lh dist
 
       - name: Package tarball
+        if: runner.os == 'macOS'
         shell: bash
         run: |
           set -euo pipefail
@@ -108,72 +142,6 @@ jobs:
           (cd dist && shasum -a 256 "${name}.tar.gz" > "${name}.tar.gz.sha256")
           ls -lh dist
 
-      - name: Install dpkg-deb and rpmbuild
-        if: startsWith(matrix.os, 'ubuntu')
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y dpkg-dev rpm
-
-      - name: Build .deb
-        if: startsWith(matrix.os, 'ubuntu')
-        shell: bash
-        run: |
-          set -euo pipefail
-          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
-            version="${{ inputs.tag }}"
-          else
-            version="${GITHUB_REF_NAME}"
-          fi
-          version_no_v="${version#v}"
-          case "${{ matrix.label }}" in
-            linux-amd64) deb_arch=amd64 ;;
-            linux-arm64) deb_arch=arm64 ;;
-          esac
-          pkg_root="dist/debian/${deb_arch}"
-          mkdir -p "$pkg_root/usr/local/bin"
-          install -m 0755 "target/${{ matrix.target }}/release/squeezed" "$pkg_root/usr/local/bin/squeezed"
-          sed -i "s/^Version: .*/Version: ${version_no_v}/" "$pkg_root/DEBIAN/control"
-          dpkg-deb --build --root-owner-group "$pkg_root" "dist/squeezed_${version_no_v}_${deb_arch}.deb"
-
-      - name: Build .rpm
-        if: matrix.label == 'linux-amd64'
-        shell: bash
-        run: |
-          set -euo pipefail
-          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
-            version="${{ inputs.tag }}"
-          else
-            version="${GITHUB_REF_NAME}"
-          fi
-          version_no_v="${version#v}"
-          rpm_arch=amd64
-          rpm_target=x86_64
-          src_root="dist/rpm/${rpm_arch}"
-          mkdir -p "${src_root}/usr/local/bin"
-          install -m 0755 "target/${{ matrix.target }}/release/squeezed" "${src_root}/usr/local/bin/squeezed"
-          sed -i "s/^Version:        .*/Version:        ${version_no_v}/" "${src_root}/squeezed.spec"
-
-          rpm_top="$(pwd)/dist/rpmbuild"
-          mkdir -p "${rpm_top}"/{BUILD,BUILDROOT,RPMS,SOURCES,SPECS,SRPMS}
-          cp -r "${src_root}" "${rpm_top}/SOURCES/${rpm_arch}"
-          rpmbuild --define "_topdir ${rpm_top}" \
-                   --define "_sourcedir ${rpm_top}/SOURCES" \
-                   --target "${rpm_target}" \
-                   -bb "${src_root}/squeezed.spec"
-          find "${rpm_top}/RPMS" -name '*.rpm' -exec mv {} dist/ \;
-
-      - name: Checksum packages
-        if: startsWith(matrix.os, 'ubuntu')
-        shell: bash
-        run: |
-          set -euo pipefail
-          cd dist
-          for f in *.deb *.rpm; do
-            [ -e "$f" ] || continue
-            shasum -a 256 "$f" > "$f.sha256"
-          done
-          ls -lh
-
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
@@ -187,6 +155,7 @@ jobs:
 
   # FreeBSD builds quickly and reliably (`pkg install` from a fast CDN), so it
   # stays on the release's critical path.
+
   build-freebsd:
     name: freebsd-amd64
     runs-on: ubuntu-latest
@@ -319,6 +288,12 @@ jobs:
     needs: [build, build-freebsd]
     runs-on: ubuntu-latest
     steps:
+      - name: Checkout pipeline
+        uses: actions/checkout@v4
+
+      - name: Install Dagger
+        run: bash .dagger/install-dagger.sh
+
       - name: Download all artifacts
         uses: actions/download-artifact@v4
         with:
@@ -328,14 +303,13 @@ jobs:
       - name: Show artifacts
         run: ls -lh dist
 
-      - name: Create release
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: ${{ github.event.inputs.tag || github.ref_name }}
-          files: dist/*
-          generate_release_notes: true
-          draft: false
-          prerelease: false
+      - name: Publish release with Dagger
+        working-directory: .dagger
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
+          WORKFLOW_RUN: ${{ github.run_id }}-${{ github.run_attempt }}
+        run: dagger api call -m ci publish-release --assets ../dist --tag "$RELEASE_TAG" --token env://GH_TOKEN --run-id "$WORKFLOW_RUN"
 
       - name: Check Gemfury secrets
         id: gemfury
@@ -350,21 +324,15 @@ jobs:
             echo "Gemfury secrets not set; skipping push"
           fi
 
-      - name: Push .deb and .rpm to Gemfury
+      - name: Publish packages with Dagger
         if: steps.gemfury.outputs.available == 'true'
+        working-directory: .dagger
         env:
           FURY_TOKEN: ${{ secrets.FURY_TOKEN }}
           FURY_ACCOUNT: ${{ secrets.FURY_ACCOUNT }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          shopt -s nullglob
-          for pkg in dist/*.deb dist/*.rpm; do
-            echo "Pushing $pkg to Gemfury (${FURY_ACCOUNT})"
-            curl -fsS -F package=@"${pkg}" \
-              "https://${FURY_TOKEN}@push.fury.io/${FURY_ACCOUNT}/"
-            echo
-          done
+          WORKFLOW_RUN: ${{ github.run_id }}-${{ github.run_attempt }}
+        run: dagger api call -m ci publish-gemfury --assets ../dist --account env://FURY_ACCOUNT --token env://FURY_TOKEN --run-id "$WORKFLOW_RUN"
+
 
   # Attach the NetBSD tarball to the already-published release once it's ready.
   # Depends on `release` (so the release exists) but `release` never waits on
