@@ -73,6 +73,13 @@
         # Cache the dependency graph separately from the crate source.
         cargoArtifacts = craneLib.buildDepsOnly commonArgs;
 
+        # Source-based coverage works inside Dagger without disabling ASLR or
+        # using ptrace. Build with the matching Fenix rustc and LLVM tools, not
+        # the ordinary nixpkgs toolchain's dependency artifacts.
+        llvmCoverage = craneLibLLvmTools.cargoLlvmCov (commonArgs // {
+          cargoArtifacts = null;
+        });
+
         squeezed = craneLib.buildPackage (commonArgs // {
           inherit cargoArtifacts;
           doCheck = false;
@@ -117,18 +124,14 @@
             partitionType = "count";
           });
         } // lib.optionalAttrs (system == "x86_64-linux") {
-          squeezed-coverage = craneLib.cargoTarpaulin (commonArgs // {
-            inherit cargoArtifacts;
-          });
+          squeezed-coverage = llvmCoverage;
         };
 
         packages = {
           default = squeezed;
           squeezed = squeezed;
 
-          squeezed-llvm-coverage = craneLibLLvmTools.cargoLlvmCov (commonArgs // {
-            inherit cargoArtifacts;
-          });
+          squeezed-llvm-coverage = llvmCoverage;
         };
 
         apps.default = flake-utils.lib.mkApp {
