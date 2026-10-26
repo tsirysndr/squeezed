@@ -78,3 +78,10 @@ PureScript pipeline tests and SDK transport tests. Full Dagger builds and publis
 were deliberately left to GitHub Actions; they were not run locally.
 
 Native macOS and BSD builds, and FlakeHub OIDC publishing, remain outside Dagger.
+
+The x86_64 Linux flake coverage check uses `cargo-llvm-cov` with the pinned
+Fenix Rust/LLVM toolchain. LLVM instrumentation runs inside Dagger without
+Tarpaulin's ptrace/ASLR operations, which the container rejects with `EPERM`.
+Coverage remains mandatory in `nix flake check`; the same derivation is exposed
+as `packages.squeezed-llvm-coverage`. Its dependency artifacts are built with
+the coverage toolchain rather than reused from the ordinary Rust build.
