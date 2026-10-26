@@ -3,7 +3,7 @@
 //! When Squeezelite receives our `strm` command it opens an HTTP connection
 //! here (with `?player=<mac>&sid=<session>` in the URL) and reads raw PCM
 //! until end of stream.
-//! Each connection gets its own [`BroadcastReceiver`]; we also record the
+//! Each connection gets its own [`BroadcastReceiver`](crate::broadcast::BroadcastReceiver); we also record the
 //! absolute byte position of the live head at attach time and hand it to the
 //! [`SyncManager`] as this player's anchor.
 

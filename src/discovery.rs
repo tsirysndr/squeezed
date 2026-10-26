@@ -60,7 +60,7 @@ pub fn serve(bind_ip: &str, port: u16, name: &str, http_port: u16) -> anyhow::Re
     }
 }
 
-/// Parse the tag names from a TLV "get" body (each entry: tag[4] len[1] value[len]).
+/// Parse the tag names from a TLV "get" body (each entry: `tag[4] len[1] value[len]`).
 fn parse_requested_tags(body: &[u8]) -> Vec<[u8; 4]> {
     let mut tags = Vec::new();
     let mut i = 0;
