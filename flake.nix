@@ -106,6 +106,9 @@
 
           squeezed-audit = craneLib.cargoAudit {
             inherit src advisory-db;
+            # Nix builds have no live crates.io index. Unlike --ignore yanked,
+            # --no-yanked skips index lookups while preserving RustSec checks.
+            cargoAuditExtraArgs = "--no-yanked";
           };
 
           squeezed-nextest = craneLib.cargoNextest (commonArgs // {
