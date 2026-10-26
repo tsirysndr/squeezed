@@ -56,7 +56,7 @@ packageRelease client { source, binary, target, label, version } = do
       # Directory.withFile "LICENSE" (Directory.file "LICENSE" source)
       # Directory.withFile "squeezed.example.toml" (Directory.file "squeezed.example.toml" source)
     base = Query.container client
-      # Container.from "node:22-bookworm-slim"
+      # Container.from "node:24-bookworm-slim"
       # Container.withExec [ "apt-get", "update" ]
       # Container.withExec [ "apt-get", "install", "-y", "--no-install-recommends", "dpkg-dev", "rpm", "libdigest-sha-perl" ]
       # Container.withDirectory "/stage" stage

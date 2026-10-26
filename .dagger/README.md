@@ -55,7 +55,7 @@ engine; the workflow snapshots only the explicitly listed application volumes.
 
 ## Develop the pipeline
 
-Dagger installs Node 22, PureScript 0.15.16 and Spago 1.0.5 **inside the SDK
+Dagger installs Node 24, PureScript 0.15.16 and Spago 1.0.5 **inside the SDK
 runtime container**, under `/usr/local`; Spago's dependency cache is under
 `/root/.cache/spago-nodejs`. Module compilation happens under `/src`. You only
 need the Dagger CLI and a supported engine/container runtime on the host.

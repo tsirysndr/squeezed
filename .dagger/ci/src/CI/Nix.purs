@@ -25,7 +25,7 @@ build _ client args = do
     store = Query.cacheVolume "squeezed-nix-store" client
     -- The cache also contains Nix itself; seed it before mounting over /nix.
     seed = Query.container client
-      # Container.from "node:22-bookworm-slim"
+      # Container.from "node:24-bookworm-slim"
       # Container.withDirectory "/seed" (Container.directory "/nix" image)
       # Container.withMountedCache "/nix" store
       # Container.withEnvVariable "NIX_RUN" args.runId
