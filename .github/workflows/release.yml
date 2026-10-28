@@ -66,7 +66,7 @@ jobs:
           key: release-${{ matrix.target }}
           volumes: squeezed-cargo-registry,squeezed-cargo-git,squeezed-target-${{ matrix.target }}
           command: |
-            dagger api call -m ci linux-release --source ../.source --target "$TARGET" --version "$VERSION" --output ../dist
+            dagger --progress logs -v api call -m ci linux-release --source ../.source --target "$TARGET" --version "$VERSION" --output ../dist
 
       - name: Checkout
         if: runner.os == 'macOS'
@@ -313,7 +313,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
           WORKFLOW_RUN: ${{ github.run_id }}-${{ github.run_attempt }}
-        run: dagger api call -m ci publish-release --assets ../dist --tag "$RELEASE_TAG" --token env://GH_TOKEN --run-id "$WORKFLOW_RUN"
+        run: dagger --progress logs -v api call -m ci publish-release --assets ../dist --tag "$RELEASE_TAG" --token env://GH_TOKEN --run-id "$WORKFLOW_RUN"
 
       - name: Publish packages with Dagger
         working-directory: .dagger
@@ -321,7 +321,7 @@ jobs:
           FURY_TOKEN: ${{ secrets.FURY_TOKEN }}
           FURY_ACCOUNT: ${{ secrets.FURY_ACCOUNT }}
           WORKFLOW_RUN: ${{ github.run_id }}-${{ github.run_attempt }}
-        run: dagger api call -m ci publish-gemfury --assets ../dist --account env://FURY_ACCOUNT --token env://FURY_TOKEN --run-id "$WORKFLOW_RUN"
+        run: dagger --progress logs -v api call -m ci publish-gemfury --assets ../dist --account env://FURY_ACCOUNT --token env://FURY_TOKEN --run-id "$WORKFLOW_RUN"
 
 
   # Attach the NetBSD tarball to the already-published release once it's ready.
