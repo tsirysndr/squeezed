@@ -17,13 +17,18 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Install Dagger
-        uses: dagger/dagger-for-github@27b130bf0f79a7f6fbbbe0fbca6760dc9bb40a77
+      - name: Checkout FluentCI tooling
+        uses: actions/checkout@v4
         with:
-          version: v1.0.0-beta.21
-
-      - name: Run PureScript Dagger pipeline
-        uses: ./.github/actions/dagger
+          ref: ${{ github.workflow_sha }}
+          path: .ci-tooling
+      - uses: fluentci-io/setup-fluentci@next
+      - uses: ./.ci-tooling/.github/actions/fluentci-toolchain
+      - name: Set up the pinned Dagger beta with FluentCI
+        run: fluentci run --work-dir "$GITHUB_WORKSPACE/.ci-tooling" ci setup-dagger
+        shell: bash
+      - name: Run container pipeline with FluentCI
+        uses: ./.ci-tooling/.github/actions/dagger
         env:
           CACHIX_AUTH_TOKEN: ""
           WORKFLOW_RUN: ${{ github.run_id }}-${{ github.run_attempt }}
@@ -31,5 +36,8 @@ jobs:
           module: ci
           key: nix-flake
           volumes: squeezed-nix-store
-          command: |
-            dagger --progress logs -v api call -m ci nix-build --source .. --cachix-token env://CACHIX_AUTH_TOKEN --run-id "$WORKFLOW_RUN"
+          command: |-
+            fluentci run --work-dir "$GITHUB_WORKSPACE/.ci-tooling" ci dagger --directory "$GITHUB_WORKSPACE/.dagger" --arguments '["--progress","logs","-v","api","call","-m","ci","nix-build","--source","..","--cachix-token","env://CACHIX_AUTH_TOKEN","--run-id","$WORKFLOW_RUN"]'
+    defaults:
+      run:
+        shell: bash

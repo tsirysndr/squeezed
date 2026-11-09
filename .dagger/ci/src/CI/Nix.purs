@@ -39,7 +39,7 @@ build _ client args = do
       # Container.withEnvVariable "NIX_PATH" "nixpkgs=channel:nixos-unstable"
       # Container.withDirectoryWith "/src" args.source
           (Container.defaultWithDirectoryOpts
-            { exclude = Just [ ".git", ".dagger", ".source", "**/target", "**/node_modules", "**/.env", "**/.env.*", "result", "result-*", "*.db*", "covers", "smolsonic.toml" ] })
+            { exclude = Just [ ".ci-tooling", ".fluentci", ".git", ".dagger", ".source", "**/target", "**/node_modules", "**/.env", "**/.env.*", "result", "result-*", "*.db*", "covers", "smolsonic.toml" ] })
       # Container.withSecretVariable "CACHIX_AUTH_TOKEN" args.cachixToken
       # Container.withEnvVariable "NIX_RUN" args.runId
   void $ Container.sync $ environment

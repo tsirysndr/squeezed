@@ -23,7 +23,7 @@ buildArgs = ado
 withSource :: Directory -> Container -> Container
 withSource source = Container.withDirectoryWith "/src" source
   (Container.defaultWithDirectoryOpts
-    { exclude = Just [ ".git", ".dagger", ".source", ".fluentci", "target", "**/node_modules", "**/.env", "**/.env.*", "result", "result-*", "dist/*.tar.gz*", "dist/*.deb*", "dist/*.rpm*", "dist/staging", "dist/rpmbuild", "*.db*", "covers", "smolsonic.toml" ] })
+    { exclude = Just [ ".ci-tooling", ".fluentci", ".git", ".dagger", ".source", ".fluentci", "target", "**/node_modules", "**/.env", "**/.env.*", "result", "result-*", "dist/*.tar.gz*", "dist/*.deb*", "dist/*.rpm*", "dist/staging", "dist/rpmbuild", "*.db*", "covers", "smolsonic.toml" ] })
 
 withCargoCaches :: Client -> String -> Container -> Container
 withCargoCaches client target container = container
