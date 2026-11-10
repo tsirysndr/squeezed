@@ -24,20 +24,14 @@ jobs:
           path: .ci-tooling
       - uses: fluentci-io/setup-fluentci@next
       - uses: ./.ci-tooling/.github/actions/fluentci-toolchain
-      - name: Set up the pinned Dagger beta with FluentCI
-        run: fluentci run --work-dir "$GITHUB_WORKSPACE/.ci-tooling" ci setup-dagger
-        shell: bash
-      - name: Run container pipeline with FluentCI
-        uses: ./.ci-tooling/.github/actions/dagger
+      - name: Set up Nix with FluentCI
+        run: fluentci run setup-determinate-nix setup --sudo --trusted-users '["runner"]' --extra-conf '["experimental-features = nix-command flakes"]' | node "$GITHUB_WORKSPACE/.ci-tooling/.fluentci/github-env.mjs"
+      - name: Run native PureScript CI
         env:
           CACHIX_AUTH_TOKEN: ""
           WORKFLOW_RUN: ${{ github.run_id }}-${{ github.run_attempt }}
-        with:
-          module: ci
-          key: nix-flake
-          volumes: squeezed-nix-store
-          command: |-
-            fluentci run --work-dir "$GITHUB_WORKSPACE/.ci-tooling" ci dagger --directory "$GITHUB_WORKSPACE/.dagger" --arguments '["--progress","logs","-v","api","call","-m","ci","nix-build","--source","..","--cachix-token","env://CACHIX_AUTH_TOKEN","--run-id","$WORKFLOW_RUN"]'
+        run: |-
+          fluentci run --work-dir "$GITHUB_WORKSPACE/.ci-tooling" ci nix-build --source "$GITHUB_WORKSPACE/.dagger/.." --target ".#default" --cache tsirysndr
     defaults:
       run:
         shell: bash
